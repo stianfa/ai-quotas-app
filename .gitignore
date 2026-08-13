@@ -1,0 +1,13 @@
+# Build output
+mac/build/
+*.cstemp
+
+# Node
+node_modules/
+npm-debug.log*
+
+# macOS
+.DS_Store
+
+# Per-machine tool settings (a shared .claude/settings.json is fine to commit)
+.claude/settings.local.json

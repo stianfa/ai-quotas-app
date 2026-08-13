@@ -1,0 +1,200 @@
+:root {
+  --bg: #f7f7f8;
+  --card: #ffffff;
+  --text: #1a1a1c;
+  --muted: #6b6b73;
+  --line: #e4e4e8;
+  --track: #ececf0;
+  --ok: #1f9d55;
+  --warn: #c77700;
+  --crit: #d13c2f;
+  --accent: #5b5bd6;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .04), 0 4px 12px rgba(0, 0, 0, .04);
+  --radius: 14px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131316;
+    --card: #1c1c20;
+    --text: #ececf1;
+    --muted: #9a9aa5;
+    --line: #2c2c33;
+    --track: #2a2a31;
+    --ok: #3ecf7f;
+    --warn: #e8a33d;
+    --crit: #f2685c;
+    --accent: #8b8bf0;
+    --shadow: none;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 620px;
+  margin: 0 auto;
+  padding: 40px 20px 56px;
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -.01em;
+}
+
+.sub {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.refresh {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--card);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color .15s, border-color .15s;
+}
+.refresh:hover { color: var(--text); border-color: var(--muted); }
+.refresh.spin svg { animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.cards { display: flex; flex-direction: column; gap: 14px; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 18px 20px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.name { font-weight: 620; font-size: 15px; }
+
+.pill {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 100px;
+  background: var(--track);
+  color: var(--muted);
+  text-transform: lowercase;
+  letter-spacing: .01em;
+}
+.pill.crit { background: color-mix(in srgb, var(--crit) 16%, transparent); color: var(--crit); }
+.pill.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+
+.window { margin-top: 14px; }
+
+.window-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.window-label { font-size: 13px; color: var(--muted); }
+
+.window-val {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.window-val.ok { color: var(--ok); }
+.window-val.warn { color: var(--warn); }
+.window-val.crit { color: var(--crit); }
+.window-val.none { color: var(--muted); }
+
+.track {
+  height: 7px;
+  border-radius: 100px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  border-radius: 100px;
+  /* Width animates on refresh so a jump in usage is visible. */
+  transition: width .5s cubic-bezier(.4, 0, .2, 1);
+}
+.fill.ok { background: var(--ok); }
+.fill.warn { background: var(--warn); }
+.fill.crit { background: var(--crit); }
+
+.reset {
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.err {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--crit);
+}
+.hint {
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.hint code {
+  background: var(--track);
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-size: 12px;
+}
+
+.foot {
+  margin-top: 28px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  line-height: 1.6;
+}
+
+.skeleton {
+  height: 96px;
+  border-radius: var(--radius);
+  background: linear-gradient(90deg, var(--card) 0%, var(--track) 50%, var(--card) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .fill, .refresh.spin svg, .skeleton { transition: none; animation: none; }
+}

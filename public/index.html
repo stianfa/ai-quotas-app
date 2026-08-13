@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AI Quotas</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main class="wrap">
+    <header class="head">
+      <div>
+        <h1>AI Quotas</h1>
+        <p class="sub" id="sub">Loading…</p>
+      </div>
+      <button id="refresh" class="refresh" title="Refresh now" aria-label="Refresh now">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+          <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4" />
+        </svg>
+      </button>
+    </header>
+
+    <div id="cards" class="cards"></div>
+
+    <footer class="foot">
+      Reads the logins already used by your Claude Code and Codex CLIs. Nothing leaves your machine.
+    </footer>
+  </main>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "ai-quotas-app",
+  "version": "1.0.0",
+  "description": "See your Claude and Codex usage quotas at a glance",
+  "type": "module",
+  "bin": { "ai-quotas": "src/cli.js" },
+  "scripts": {
+    "start": "node src/cli.js --serve --open",
+    "serve": "node src/cli.js --serve",
+    "quotas": "node src/cli.js"
+  },
+  "engines": { "node": ">=18" },
+  "private": true
+}
