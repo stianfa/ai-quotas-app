@@ -14,8 +14,8 @@ See how much of your Claude and Codex usage limits you've burned through, in one
     Weekly           █░░░░░░░░░░░░░░░░░░░░░░░░░░░   4%  resets in 6d 23h
 ```
 
-There are no API keys to paste and nothing to configure. It reuses the logins the Claude Code and
-Codex CLIs already stored on your machine, and everything runs locally.
+There are no API keys to paste and nothing to configure. It reuses your existing Claude Code and
+Codex sessions, and the app itself runs locally.
 
 ## What you need first
 
@@ -96,48 +96,57 @@ A `cached` tag means the numbers came from local session logs because the provid
 **"Token rejected"** — your saved login expired past the point of refresh. Sign in again with
 `claude` or `codex login`.
 
-**Codex errors while Claude works** — usually the model in `~/.codex/config.toml` isn't one your
-account can use. It falls back to the model from your most recent session, then to a default.
+**Codex errors while Claude works** — update the Codex CLI and confirm `codex login` succeeds.
+AI Quotas uses the CLI's app-server account API and falls back to recent local quota snapshots.
 
 **A macOS keychain prompt appears** — expected only for the menu bar app on some setups;
 [`mac/README.md`](mac/README.md) explains why and what to do.
 
 ## How it gets the data
 
-Neither CLI stores your current quota on disk — it only exists in API response headers. So each
-provider makes one minimal request and reads the headers off it:
+Each provider is checked locally through its installed CLI session:
 
 - **Claude** — a 1-token request to `api.anthropic.com`, reading the `anthropic-ratelimit-unified-*`
   headers.
-- **Codex** — opens the streaming endpoint at `chatgpt.com/backend-api/codex/responses` and aborts
-  the moment headers land, reading `x-codex-*`. Nothing is generated, so nothing is billed.
+- **Codex** — asks the documented [Codex app-server API](https://developers.openai.com/codex/app-server/#6-rate-limits-chatgpt)
+  for `account/rateLimits/read`. The Codex CLI owns authentication and token refresh, and no model
+  response is generated.
 
-Both refresh their OAuth token automatically when it's close to expiring, writing it back to the
-same credential store the CLIs use, so this stays in sync rather than fighting them.
+AI Quotas never writes either CLI's credential store. Codex refreshes its own session through
+app-server. If the Claude token expires, run `claude` once and refresh AI Quotas.
 
 If Codex can't be reached, it falls back to the most recent quota snapshot in your session logs and
 marks the card `cached` so you know it isn't live.
 
 ### Cost
 
-Effectively zero. The Claude poll caps output at 1 token on the cheapest model; the Codex poll
-generates nothing. Both count as requests against your account, which is why the server caches for
-15 seconds and the dashboard polls once a minute.
+Effectively zero. The Claude poll caps output at 1 token on the cheapest model; the Codex account
+query generates nothing. The server caches for 15 seconds and the dashboard polls once a minute.
 
 ### Where credentials are read from
 
-Nothing is copied anywhere. Tokens are read in place, and are never logged or sent anywhere except
-to their own provider.
+Nothing is copied into this repository or an AI Quotas data store, and tokens are never logged.
 
-| Provider | Location |
+| Provider | Access |
 |---|---|
-| Claude | macOS keychain, service `Claude Code-credentials` (falls back to `~/.claude/.credentials.json`) |
-| Codex | `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`) |
+| Claude | Read-only from macOS keychain service `Claude Code-credentials` (falling back to `~/.claude/.credentials.json`), then sent only to Anthropic |
+| Codex | Through the local `codex app-server`; AI Quotas does not read `auth.json` directly |
 
 The local server binds to `127.0.0.1` only.
 
-Because this depends on undocumented response headers, a provider could change them at any time.
-The cards fail loudly with a hint rather than silently showing stale numbers.
+### Privacy, support, and provider status
+
+- AI Quotas has no telemetry, analytics, remote server, or account system. Quota results stay in
+  memory and are shown only in the local CLI, menu bar, or dashboard.
+- Quota checks necessarily contact Anthropic and OpenAI. Their normal account, retention, and
+  workspace policies apply to those requests.
+- Codex uses OpenAI's documented app-server rate-limit method. The Claude integration is
+  experimental: it reuses Claude Code authentication and depends on undocumented response headers,
+  which Anthropic may change.
+- This is an independent project and is not affiliated with, endorsed by, or supported by
+  Anthropic or OpenAI.
+
+Provider changes fail visibly with a hint rather than silently displaying invented live values.
 
 ## Adding another provider
 
@@ -166,7 +175,7 @@ The menu bar app is separate; [`mac/README.md`](mac/README.md) covers adding a p
 ## Layout
 
 ```
-src/providers/base.js     shared helpers — credentials, keychain, atomic writes
+src/providers/base.js     shared result, keychain-read, and network helpers
 src/providers/claude.js   Anthropic
 src/providers/codex.js    OpenAI / ChatGPT
 src/providers/index.js    registry + parallel fetch

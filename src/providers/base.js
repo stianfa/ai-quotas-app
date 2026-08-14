@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFile, writeFile, rename } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 
 const execFileAsync = promisify(execFile);
 
@@ -33,13 +33,6 @@ export async function readJson(path) {
   }
 }
 
-/** Write JSON atomically so a crash mid-write can't corrupt a credential file. */
-export async function writeJsonAtomic(path, data, mode = 0o600) {
-  const tmp = `${path}.tmp-${process.pid}`;
-  await writeFile(tmp, JSON.stringify(data, null, 2), { mode });
-  await rename(tmp, path);
-}
-
 /** Read a secret from the macOS keychain. */
 export async function keychainGet(service) {
   try {
@@ -50,12 +43,6 @@ export async function keychainGet(service) {
   } catch {
     return null;
   }
-}
-
-export async function keychainSet(service, account, value) {
-  await execFileAsync('security', [
-    'add-generic-password', '-U', '-s', service, '-a', account, '-w', value,
-  ]);
 }
 
 /** fetch() with a hard timeout — a hung provider must not hang the dashboard. */

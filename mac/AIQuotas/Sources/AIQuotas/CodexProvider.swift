@@ -1,79 +1,178 @@
 import Foundation
 
-/// Codex returns quota in `x-codex-*` response headers on the streaming endpoint.
-/// We open the stream and cancel it the moment headers land, so no tokens are
-/// generated and nothing is billed.
+/// Reads ChatGPT quota through Codex's documented app-server account API.
+/// Codex owns authentication and token refresh; this app never reads or writes
+/// `auth.json` directly.
 enum CodexProvider {
-    private static let responsesURL = URL(string: "https://chatgpt.com/backend-api/codex/responses")!
-    private static let tokenURL = URL(string: "https://auth.openai.com/oauth/token")!
-    private static let clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
-
     private static var codexHome: URL {
         if let env = ProcessInfo.processInfo.environment["CODEX_HOME"], !env.isEmpty {
             return URL(fileURLWithPath: env)
         }
         return Credentials.home.appendingPathComponent(".codex")
     }
-    private static var authFile: URL { codexHome.appendingPathComponent("auth.json") }
 
-    private struct Tokens {
-        var access: String
-        var accountID: String
+    private static func codexExecutable() -> URL? {
+        let fm = FileManager.default
+        var candidates: [URL] = []
+        if let explicit = ProcessInfo.processInfo.environment["CODEX_PATH"], !explicit.isEmpty {
+            candidates.append(URL(fileURLWithPath: explicit))
+        }
+        candidates += [
+            URL(fileURLWithPath: "/opt/homebrew/bin/codex"),
+            URL(fileURLWithPath: "/usr/local/bin/codex"),
+            Credentials.home.appendingPathComponent(".local/bin/codex"),
+            Credentials.home.appendingPathComponent(".volta/bin/codex"),
+            Credentials.home.appendingPathComponent(".asdf/shims/codex"),
+            Credentials.home.appendingPathComponent(".fnm/aliases/default/bin/codex"),
+        ]
+
+        // GUI apps do not inherit an interactive shell's PATH. Include NVM's
+        // versioned installs explicitly so a menu-bar launch finds the same CLI.
+        let nvm = Credentials.home.appendingPathComponent(".nvm/versions/node")
+        if let versions = try? fm.contentsOfDirectory(
+            at: nvm, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        ) {
+            candidates += versions.sorted { $0.lastPathComponent > $1.lastPathComponent }
+                .map { $0.appendingPathComponent("bin/codex") }
+        }
+        return candidates.first { fm.isExecutableFile(atPath: $0.path) }
     }
 
-    private static func refresh(_ root: [String: Any]) async throws -> Tokens {
-        guard var tokens = root["tokens"] as? [String: Any],
-              let refreshToken = tokens["refresh_token"] as? String
-        else { throw QuotaError.authFailed("no refresh token available") }
+    private final class ProcessBox: @unchecked Sendable {
+        let process: Process
+        init(_ process: Process) { self.process = process }
+    }
 
-        var req = URLRequest(url: tokenURL)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "content-type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: [
-            "grant_type": "refresh_token",
-            "refresh_token": refreshToken,
-            "client_id": clientID,
-            "scope": "openid profile email",
+    /// Blocking stdio exchange, always run from a detached utility task.
+    private static func appServerResponse() throws -> Data {
+        guard let executable = codexExecutable() else {
+            throw QuotaError.message("Codex CLI not found")
+        }
+
+        let proc = Process()
+        proc.executableURL = executable
+        proc.arguments = ["app-server"]
+        // NVM installs `codex` beside its matching `node` binary and uses an
+        // `/usr/bin/env node` shebang. GUI apps have a minimal PATH, so prepend
+        // the located CLI directory for the child without changing global state.
+        var environment = ProcessInfo.processInfo.environment
+        let inheritedPath = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        environment["PATH"] = "\(executable.deletingLastPathComponent().path):\(inheritedPath)"
+        proc.environment = environment
+        let input = Pipe(), output = Pipe()
+        proc.standardInput = input
+        proc.standardOutput = output
+        proc.standardError = FileHandle.nullDevice
+        try proc.run()
+
+        let box = ProcessBox(proc)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 20) {
+            if box.process.isRunning { box.process.terminate() }
+        }
+        defer {
+            try? input.fileHandleForWriting.close()
+            if proc.isRunning { proc.terminate() }
+            proc.waitUntilExit()
+        }
+
+        func send(_ object: [String: Any]) throws {
+            var data = try JSONSerialization.data(withJSONObject: object)
+            data.append(0x0A)
+            try input.fileHandleForWriting.write(contentsOf: data)
+        }
+
+        var buffer = Data()
+        func readMessage(id: Int) throws -> [String: Any] {
+            while true {
+                if let newline = buffer.firstIndex(of: 0x0A) {
+                    let line = buffer[..<newline]
+                    buffer.removeSubrange(...newline)
+                    guard !line.isEmpty,
+                          let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any]
+                    else { continue }
+                    if (object["id"] as? Int) == id { return object }
+                    continue
+                }
+                let chunk = output.fileHandleForReading.availableData
+                if chunk.isEmpty {
+                    throw QuotaError.message("Codex app-server closed before replying")
+                }
+                buffer.append(chunk)
+            }
+        }
+
+        try send([
+            "method": "initialize", "id": 0,
+            "params": ["clientInfo": [
+                "name": "ai_quotas", "title": "AI Quotas", "version": "1.0.0",
+            ]],
         ])
+        let initialized = try readMessage(id: 0)
+        if let error = initialized["error"] as? [String: Any] {
+            throw QuotaError.message(error["message"] as? String ?? "Codex app-server initialization failed")
+        }
 
-        let (data, resp) = try await quotaSession.data(for: req)
-        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { throw QuotaError.authFailed("token refresh failed — run `codex login`") }
-
-        if let a = obj["access_token"] as? String { tokens["access_token"] = a }
-        if let i = obj["id_token"] as? String { tokens["id_token"] = i }
-        if let r = obj["refresh_token"] as? String { tokens["refresh_token"] = r }
-
-        var updated = root
-        updated["tokens"] = tokens
-        updated["last_refresh"] = ISO8601DateFormatter().string(from: Date())
-        Credentials.writeJSONAtomic(authFile, updated)   // best-effort
-
-        return Tokens(access: tokens["access_token"] as? String ?? "",
-                      accountID: tokens["account_id"] as? String ?? "")
+        try send(["method": "initialized", "params": [:]])
+        try send(["method": "account/rateLimits/read", "id": 1])
+        let response = try readMessage(id: 1)
+        if let error = response["error"] as? [String: Any] {
+            throw QuotaError.message(error["message"] as? String ?? "Codex rate-limit request failed")
+        }
+        return try JSONSerialization.data(withJSONObject: response)
     }
 
-    private static func tokens() async throws -> Tokens {
-        guard let root = Credentials.readJSON(authFile),
-              let tok = root["tokens"] as? [String: Any],
-              let access = tok["access_token"] as? String
-        else { throw QuotaError.noCredentials("no Codex credentials found") }
-
-        if let exp = Credentials.jwtExpiryMS(access),
-           exp - Date().timeIntervalSince1970 * 1000 < 60_000 {
-            return try await refresh(root)
+    private static func windowLabel(minutes: Double?, fallback: String) -> String {
+        guard let m = minutes, m > 0 else { return fallback }
+        if m.truncatingRemainder(dividingBy: 10080) == 0 {
+            let w = Int(m / 10080)
+            return w == 1 ? "Weekly" : "\(w)-week"
         }
-        return Tokens(access: access, accountID: tok["account_id"] as? String ?? "")
+        if m.truncatingRemainder(dividingBy: 1440) == 0 {
+            let d = Int(m / 1440)
+            return d == 1 ? "Daily" : "\(d)-day"
+        }
+        if m.truncatingRemainder(dividingBy: 60) == 0 { return "\(Int(m / 60))-hour" }
+        return "\(Int(m))-minute"
     }
 
-    /// The model must be one the account can actually use, so read the CLI's config.
-    private static func model() -> String {
-        if let m = Credentials.topLevelTOMLString(codexHome.appendingPathComponent("config.toml"), key: "model") {
-            return m
+    private static func liveResult(from data: Data) throws -> ProviderResult {
+        guard let response = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = response["result"] as? [String: Any]
+        else { throw QuotaError.message("malformed Codex app-server response") }
+
+        let byID = result["rateLimitsByLimitId"] as? [String: Any]
+        let first = byID?.values.compactMap { $0 as? [String: Any] }.first
+        guard let limits = (byID?["codex"] as? [String: Any])
+                ?? (result["rateLimits"] as? [String: Any]) ?? first,
+              let primary = limits["primary"] as? [String: Any]
+        else { throw QuotaError.message("Codex returned no ChatGPT rate limits") }
+
+        func number(_ dict: [String: Any], _ key: String) -> Double? {
+            (dict[key] as? NSNumber)?.doubleValue
         }
-        if let m = modelFromRecentSession() { return m }
-        return "gpt-5.6-sol"
+        func window(_ dict: [String: Any], id: String, fallback: String) -> QuotaWindow {
+            QuotaWindow(
+                id: id,
+                label: windowLabel(minutes: number(dict, "windowDurationMins"), fallback: fallback),
+                usedPercent: number(dict, "usedPercent"),
+                resetsAt: number(dict, "resetsAt").map { Date(timeIntervalSince1970: $0) }
+            )
+        }
+
+        var windows = [window(primary, id: "primary", fallback: "Primary")]
+        if let secondary = limits["secondary"] as? [String: Any],
+           (number(secondary, "windowDurationMins") ?? 0) > 0 {
+            windows.append(window(secondary, id: "secondary", fallback: "Secondary"))
+        }
+
+        var out = ProviderResult(id: "codex", name: "Codex")
+        out.plan = limits["planType"] as? String
+        out.windows = windows
+        if let name = limits["limitName"] as? String, !name.isEmpty { out.tags = [name] }
+        if let reached = limits["rateLimitReachedType"], !(reached is NSNull) {
+            out.rateLimited = true
+        }
+        return out
     }
 
     private static func newestSessionFiles(limit: Int) -> [URL] {
@@ -91,34 +190,7 @@ enum CodexProvider {
         return files.sorted { $0.1 > $1.1 }.prefix(limit).map(\.0)
     }
 
-    private static func modelFromRecentSession() -> String? {
-        guard let url = newestSessionFiles(limit: 1).first,
-              let text = try? String(contentsOf: url, encoding: .utf8),
-              let r = text.range(of: "\"model\"\\s*:\\s*\"([^\"]+)\"", options: .regularExpression)
-        else { return nil }
-        let seg = String(text[r])
-        guard let colon = seg.firstIndex(of: ":") else { return nil }
-        let after = seg[seg.index(after: colon)...]
-        guard let q1 = after.firstIndex(of: "\""), let q2 = after.lastIndex(of: "\""), q1 < q2
-        else { return nil }
-        return String(after[after.index(after: q1)..<q2])
-    }
-
-    private static func windowLabel(minutes: Double?, fallback: String) -> String {
-        guard let m = minutes, m > 0 else { return fallback }
-        if m.truncatingRemainder(dividingBy: 10080) == 0 {
-            let w = Int(m / 10080)
-            return w == 1 ? "Weekly" : "\(w)-week"
-        }
-        if m.truncatingRemainder(dividingBy: 1440) == 0 {
-            let d = Int(m / 1440)
-            return d == 1 ? "Daily" : "\(d)-day"
-        }
-        if m.truncatingRemainder(dividingBy: 60) == 0 { return "\(Int(m / 60))-hour" }
-        return "\(Int(m))-minute"
-    }
-
-    /// Last-resort read of recent session logs, used when the network call fails.
+    /// Last-resort read of recent session logs, used when app-server is unavailable.
     private static func fromSessionLogs() -> (windows: [QuotaWindow], plan: String?)? {
         for url in newestSessionFiles(limit: 10) {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
@@ -131,15 +203,18 @@ enum CodexProvider {
                       let primary = rl["primary"] as? [String: Any]
                 else { continue }
 
+                func number(_ dict: [String: Any], _ key: String) -> Double? {
+                    (dict[key] as? NSNumber)?.doubleValue
+                }
                 var windows: [QuotaWindow] = []
                 func add(_ dict: [String: Any], id: String, fallback: String) {
-                    let mins = dict["window_minutes"] as? Double
+                    let mins = number(dict, "window_minutes")
                     guard id == "primary" || (mins ?? 0) > 0 else { return }
                     windows.append(QuotaWindow(
                         id: id,
                         label: windowLabel(minutes: mins, fallback: fallback),
-                        usedPercent: dict["used_percent"] as? Double,
-                        resetsAt: (dict["resets_at"] as? Double).map { Date(timeIntervalSince1970: $0) }))
+                        usedPercent: number(dict, "used_percent"),
+                        resetsAt: number(dict, "resets_at").map { Date(timeIntervalSince1970: $0) }))
                 }
                 add(primary, id: "primary", fallback: "Primary")
                 if let secondary = rl["secondary"] as? [String: Any] {
@@ -151,125 +226,25 @@ enum CodexProvider {
         return nil
     }
 
-    /// Cancels the request as soon as response headers arrive — we never read the body.
-    private final class HeaderOnlyDelegate: NSObject, URLSessionDataDelegate {
-        private let cont: CheckedContinuation<HTTPURLResponse, Error>
-        private var resumed = false
-
-        init(_ cont: CheckedContinuation<HTTPURLResponse, Error>) { self.cont = cont }
-
-        func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
-                        didReceive response: URLResponse) async -> URLSession.ResponseDisposition {
-            if let http = response as? HTTPURLResponse, !resumed {
-                resumed = true
-                cont.resume(returning: http)
-            }
-            return .cancel
-        }
-
-        func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-            guard !resumed else { return }
-            resumed = true
-            cont.resume(throwing: error ?? QuotaError.message("no response"))
-        }
-    }
-
-    private static func headers(for request: URLRequest) async throws -> HTTPURLResponse {
-        let delegate = HeaderOnlyDelegate.self
-        return try await withCheckedThrowingContinuation { cont in
-            let d = HeaderOnlyDelegate(cont)
-            _ = delegate
-            // Must carry the same timeouts as `quotaSession`. A bare `.ephemeral`
-            // config defaults to a 7-day resource timeout, so a request in flight
-            // when the Mac sleeps never completes and this continuation never
-            // resumes — which used to wedge refresh() permanently.
-            let cfg = URLSessionConfiguration.ephemeral
-            cfg.timeoutIntervalForRequest = 20
-            cfg.timeoutIntervalForResource = 25
-            cfg.waitsForConnectivity = false
-            let session = URLSession(configuration: cfg, delegate: d, delegateQueue: nil)
-            session.dataTask(with: request).resume()
-            session.finishTasksAndInvalidate()
-        }
-    }
-
     static func fetch() async -> ProviderResult {
-        var result = ProviderResult(id: "codex", name: "Codex")
-
-        let tok: Tokens
         do {
-            tok = try await tokens()
+            let data = try await Task.detached(priority: .utility) {
+                try appServerResponse()
+            }.value
+            return try liveResult(from: data)
         } catch {
+            if let cached = fromSessionLogs() {
+                var result = ProviderResult(id: "codex", name: "Codex")
+                result.windows = cached.windows
+                result.plan = cached.plan
+                result.isStale = true
+                Diagnostics.log("Codex app-server unavailable — using cached limits (\(error.localizedDescription))")
+                return result
+            }
+            var result = ProviderResult(id: "codex", name: "Codex")
             result.error = error.localizedDescription
-            result.hint = "Install the Codex CLI and run `codex login`."
+            result.hint = "Install or update Codex, then sign in with ChatGPT using `codex login`."
             return result
         }
-
-        var req = URLRequest(url: responsesURL)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(tok.access)", forHTTPHeaderField: "authorization")
-        req.setValue(tok.accountID, forHTTPHeaderField: "chatgpt-account-id")
-        req.setValue("responses=experimental", forHTTPHeaderField: "OpenAI-Beta")
-        req.setValue("codex_cli_rs", forHTTPHeaderField: "originator")
-        req.setValue(UUID().uuidString, forHTTPHeaderField: "session_id")
-        req.setValue("application/json", forHTTPHeaderField: "content-type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "model": model(),
-            "instructions": "x",
-            "input": [["type": "message", "role": "user",
-                       "content": [["type": "input_text", "text": "hi"]]]],
-            "stream": true,
-            "store": false,
-            "tools": [],
-        ])
-
-        func fallback(_ why: String) -> ProviderResult {
-            var r = result
-            if let cached = fromSessionLogs() {
-                r.windows = cached.windows
-                r.plan = cached.plan
-                r.isStale = true
-                r.error = nil
-            } else if r.error == nil {
-                r.error = why
-            }
-            return r
-        }
-
-        do {
-            let http = try await headers(for: req)
-            func header(_ k: String) -> String? { http.value(forHTTPHeaderField: k) }
-            func dbl(_ k: String) -> Double? { header(k).flatMap(Double.init) }
-
-            guard let primary = dbl("x-codex-primary-used-percent") else {
-                result.error = "no quota headers returned (HTTP \(http.statusCode))"
-                if http.statusCode == 401 { result.hint = "Token rejected — run `codex login`." }
-                return fallback(result.error!)
-            }
-
-            var windows = [QuotaWindow(
-                id: "primary",
-                label: windowLabel(minutes: dbl("x-codex-primary-window-minutes"), fallback: "Primary"),
-                usedPercent: primary,
-                resetsAt: dbl("x-codex-primary-reset-at").map { Date(timeIntervalSince1970: $0) })]
-
-            // Codex sends a zeroed secondary window when the plan has only one limit.
-            if let secMinutes = dbl("x-codex-secondary-window-minutes"), secMinutes > 0 {
-                windows.append(QuotaWindow(
-                    id: "secondary",
-                    label: windowLabel(minutes: secMinutes, fallback: "Secondary"),
-                    usedPercent: dbl("x-codex-secondary-used-percent"),
-                    resetsAt: dbl("x-codex-secondary-reset-at").map { Date(timeIntervalSince1970: $0) }))
-            }
-
-            result.windows = windows
-            result.plan = header("x-codex-plan-type")
-            if let active = header("x-codex-active-limit") { result.tags = [active] }
-            result.rateLimited = http.statusCode == 429
-        } catch {
-            result.error = "network error: \(error.localizedDescription)"
-            return fallback(result.error!)
-        }
-        return result
     }
 }

@@ -4,9 +4,7 @@ import Foundation
 /// possible request (1 token, cheapest model) and read the response headers.
 enum ClaudeProvider {
     private static let service = "Claude Code-credentials"
-    private static let clientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     private static let api = URL(string: "https://api.anthropic.com/v1/messages")!
-    private static let tokenURL = URL(string: "https://console.anthropic.com/v1/oauth/token")!
     private static let systemPrompt = "You are Claude Code, Anthropic's official CLI for Claude."
 
     private static var credsFile: URL {
@@ -14,75 +12,31 @@ enum ClaudeProvider {
     }
 
     private struct Store {
-        var root: [String: Any]
         var oauth: [String: Any]
-        var fromKeychain: Bool
     }
 
     private static func load() -> Store? {
         if let data = Credentials.keychainRead(service: service),
            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let oauth = root["claudeAiOauth"] as? [String: Any] {
-            return Store(root: root, oauth: oauth, fromKeychain: true)
+            return Store(oauth: oauth)
         }
         if let root = Credentials.readJSON(credsFile),
            let oauth = root["claudeAiOauth"] as? [String: Any] {
-            return Store(root: root, oauth: oauth, fromKeychain: false)
+            return Store(oauth: oauth)
         }
         return nil
     }
 
-    private static func save(_ store: Store) {
-        var root = store.root
-        root["claudeAiOauth"] = store.oauth
-        if store.fromKeychain {
-            if let data = try? JSONSerialization.data(withJSONObject: root) {
-                Credentials.keychainWrite(service: service, account: "default", data: data)
-            }
-        } else {
-            Credentials.writeJSONAtomic(credsFile, root)
-        }
-    }
-
-    private static func refresh(_ store: Store) async throws -> String {
-        guard let refreshToken = store.oauth["refreshToken"] as? String else {
-            throw QuotaError.authFailed("no refresh token available")
-        }
-        var req = URLRequest(url: tokenURL)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "content-type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: [
-            "grant_type": "refresh_token",
-            "refresh_token": refreshToken,
-            "client_id": clientID,
-        ])
-
-        let (data, resp) = try await quotaSession.data(for: req)
-        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw QuotaError.authFailed("token refresh failed — run `claude` to sign in again")
-        }
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let access = obj["access_token"] as? String
-        else { throw QuotaError.authFailed("malformed refresh response") }
-
-        var updated = store
-        updated.oauth["accessToken"] = access
-        if let rt = obj["refresh_token"] as? String { updated.oauth["refreshToken"] = rt }
-        if let expiresIn = obj["expires_in"] as? Double {
-            updated.oauth["expiresAt"] = Date().timeIntervalSince1970 * 1000 + expiresIn * 1000
-        }
-        save(updated)   // best-effort; a read-only store shouldn't break reading
-        return access
-    }
-
-    private static func accessToken() async throws -> String {
+    private static func accessToken() throws -> String {
         guard let store = load() else {
             throw QuotaError.noCredentials("no Claude Code credentials found")
         }
-        // Refresh a minute early so a token can't expire mid-flight.
+        // Claude Code owns its rotating refresh token. Staying read-only avoids
+        // racing the CLI and accidentally overwriting a newer login.
         if let expiresAt = store.oauth["expiresAt"] as? Double,
            expiresAt - Date().timeIntervalSince1970 * 1000 < 60_000 {
-            return try await refresh(store)
+            throw QuotaError.authFailed("Claude Code login needs refreshing — run `claude` once")
         }
         guard let token = store.oauth["accessToken"] as? String else {
             throw QuotaError.noCredentials("no access token in credentials")
@@ -95,7 +49,7 @@ enum ClaudeProvider {
 
         let token: String
         do {
-            token = try await accessToken()
+            token = try accessToken()
         } catch {
             result.error = error.localizedDescription
             result.hint = "Install Claude Code and sign in — this reads the same login."

@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - run: npm test
+      - run: |
+          for file in src/*.js src/providers/*.js public/*.js; do
+            node --check "$file"
+          done
+      - run: bash -n mac/build.sh
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          swiftc -typecheck \
+            -warn-concurrency \
+            -strict-concurrency=complete \
+            -target arm64-apple-macosx14.0 \
+            -framework SwiftUI \
+            -framework AppKit \
+            -framework ServiceManagement \
+            -parse-as-library \
+            mac/AIQuotas/Sources/AIQuotas/*.swift

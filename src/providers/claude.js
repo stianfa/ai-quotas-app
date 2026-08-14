@@ -1,15 +1,12 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
-  makeWindow, ok, fail, readJson, writeJsonAtomic,
-  keychainGet, keychainSet, fetchWithTimeout,
+  makeWindow, ok, fail, readJson, keychainGet, fetchWithTimeout,
 } from './base.js';
 
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 const CREDS_FILE = join(homedir(), '.claude', '.credentials.json');
-const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'; // Claude Code's public OAuth client
 const API = 'https://api.anthropic.com/v1/messages';
-const TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token';
 
 // Claude Code identifies itself with this system prompt; OAuth tokens are only
 // accepted on requests that carry it.
@@ -21,64 +18,22 @@ async function loadCreds() {
   if (raw) {
     try {
       const parsed = JSON.parse(raw);
-      if (parsed?.claudeAiOauth) return { creds: parsed, source: 'keychain' };
+      if (parsed?.claudeAiOauth) return parsed;
     } catch { /* fall through to the file */ }
   }
   const file = await readJson(CREDS_FILE);
-  if (file?.claudeAiOauth) return { creds: file, source: 'file' };
-  return { creds: null, source: null };
-}
-
-async function saveCreds(creds, source) {
-  if (source === 'keychain') {
-    await keychainSet(KEYCHAIN_SERVICE, 'default', JSON.stringify(creds));
-  } else {
-    await writeJsonAtomic(CREDS_FILE, creds);
-  }
-}
-
-/**
- * Exchange the refresh token for a fresh access token. Claude Code writes the
- * same credential store, so we persist the result to stay in sync with the CLI.
- */
-async function refresh(creds, source) {
-  const oauth = creds.claudeAiOauth;
-  if (!oauth.refreshToken) throw new Error('no refresh token available');
-
-  const res = await fetchWithTimeout(TOKEN_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      grant_type: 'refresh_token',
-      refresh_token: oauth.refreshToken,
-      client_id: CLIENT_ID,
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`token refresh failed (HTTP ${res.status}) — run \`claude\` to re-authenticate`);
-  }
-  const data = await res.json();
-  const updated = {
-    ...creds,
-    claudeAiOauth: {
-      ...oauth,
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token ?? oauth.refreshToken,
-      expiresAt: Date.now() + data.expires_in * 1000,
-    },
-  };
-  // Best-effort persist: a read-only cred store shouldn't break the reading.
-  try { await saveCreds(updated, source); } catch { /* keep the in-memory token */ }
-  return updated.claudeAiOauth.accessToken;
+  if (file?.claudeAiOauth) return file;
+  return null;
 }
 
 async function getAccessToken() {
-  const { creds, source } = await loadCreds();
+  const creds = await loadCreds();
   if (!creds) return null;
   const oauth = creds.claudeAiOauth;
-  // Refresh a minute early so a token can't expire mid-flight.
+  // Credential stores belong to Claude Code. Never mutate them or race its
+  // rotating refresh token; ask the user to let the owning CLI refresh instead.
   if (oauth.expiresAt && oauth.expiresAt - Date.now() < 60_000) {
-    return await refresh(creds, source);
+    throw new Error('Claude Code login needs refreshing — run `claude` once');
   }
   return oauth.accessToken;
 }
@@ -177,7 +132,7 @@ export async function fetchClaude() {
     }));
   }
 
-  const { creds } = await loadCreds();
+  const creds = await loadCreds();
   const status = h.get('anthropic-ratelimit-unified-status');
 
   return ok({

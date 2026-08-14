@@ -82,6 +82,7 @@ enum MenuBarRenderer {
     /// "23h" is the widest realistic case (days/hours/minutes are ≤ 2 digits).
     private static var resetBoxWidth: CGFloat { widthOfReset("23h") }
 
+    @MainActor
     static func image(for entries: [Entry], style: Style = Style()) -> NSImage? {
         guard !entries.isEmpty else { return nil }
         let barWidth = max(12, style.barWidth)

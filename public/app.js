@@ -100,7 +100,10 @@ function render(data) {
 async function load({ force = false } = {}) {
   refreshBtn.classList.add('spin');
   try {
-    const res = await fetch(`/api/quotas${force ? '?force=1' : ''}`);
+    const res = await fetch(force ? '/api/quotas/refresh' : '/api/quotas', {
+      method: force ? 'POST' : 'GET',
+      headers: { 'X-AI-Quotas-Request': '1' },
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     lastData = await res.json();
     render(lastData);

@@ -90,7 +90,7 @@ struct SettingsView: View {
                         LoginItem.set(enabled: enabled)
                     }
 
-                Text("Each refresh makes one minimal request per provider to read your current limits. Nothing is generated and nothing leaves your Mac.")
+                Text("Each refresh checks your limits with Anthropic and OpenAI through your existing CLI sessions. AI Quotas has no telemetry or cloud service.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

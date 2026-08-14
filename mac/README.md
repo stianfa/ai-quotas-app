@@ -9,7 +9,7 @@ Claude 4h ▰▰▱▱▱▱ 30%    Codex 6d ▰▰▰▰▱▱ 72%
 Click for the full breakdown. Bars run green → amber → red as you approach a limit, and the
 dimmed `4h` / `6d` before each bar is how long until that window resets.
 
-Native Swift/SwiftUI, no dependencies, nothing leaves your Mac.
+Native Swift/SwiftUI, no third-party dependencies, and no AI Quotas cloud service.
 
 ## Before you start
 
@@ -95,21 +95,18 @@ unreachable. A `rate limited` pill means you've hit the limit right now.
 
 ## How the numbers are fetched
 
-Neither CLI persists your current quota to disk — it exists only in API response headers.
-(Claude Code's `stats-cache.json` holds token counts, not rate limits.) So each provider
-makes one minimal request per refresh:
+Each provider is checked locally through its installed CLI session:
 
 - **Claude** — a 1-token request to the cheapest model, reading the
   `anthropic-ratelimit-unified-*` response headers.
-- **Codex** — opens the streaming endpoint and cancels the instant headers arrive
-  (`URLSessionDataDelegate` returning `.cancel`), reading `x-codex-*`. Nothing is generated,
-  so nothing is billed.
+- **Codex** — asks the documented Codex app-server API for `account/rateLimits/read`. Codex owns
+  authentication and token refresh, and no model response is generated.
 
 Cost is effectively zero, but these do count as requests against your account — which is why
 the default refresh is 5 minutes rather than continuous.
 
-Both providers refresh their OAuth token when it nears expiry and write it back to the store
-the CLIs use, so this stays in sync rather than logging you out of the CLI.
+AI Quotas never writes either CLI's credential store. If the Claude token expires, run `claude`
+once and refresh the app.
 
 If Codex is unreachable, it falls back to the newest rate-limit snapshot in `~/.codex/sessions`
 and marks the card `cached`.
@@ -145,8 +142,18 @@ Apple-signed binary the item already trusts. The trusted binary performs the rea
 no prompt on any build. It's also how the Claude Code CLI reads it. See `keychainRead` in
 `Sources/AIQuotas/Credentials.swift`.
 
-Writes (after a token refresh) use the same path with `-U`, which updates the item in place
-and preserves its ACL.
+The keychain access is read-only; AI Quotas never updates or replaces the item.
+
+## Privacy and provider support
+
+- AI Quotas has no telemetry, analytics, remote server, or account system. Quota results remain
+  in memory apart from the small diagnostic log described below.
+- Checks necessarily contact Anthropic and OpenAI, whose normal account, retention, and workspace
+  policies apply. Tokens are never written to the diagnostic log.
+- Codex uses OpenAI's documented app-server rate-limit method. The Claude integration is
+  experimental because it reuses Claude Code authentication and undocumented response headers.
+- This independent project is not affiliated with, endorsed by, or supported by Anthropic or
+  OpenAI.
 
 ## Troubleshooting
 
@@ -157,9 +164,9 @@ and preserves its ACL.
 ACL than the default. Approving once per build is the workaround; a stable Developer ID
 signature is the real fix (see Sharing below).
 
-**Codex shows an error but Claude works** — most likely the model in `~/.codex/config.toml`
-isn't one your account can use. The app falls back to the model from your most recent session,
-then to a default.
+**Codex shows an error but Claude works** — update the Codex CLI and confirm `codex login`
+succeeds. The app uses Codex's app-server account API and falls back to recent local quota
+snapshots.
 
 **Nothing in the menu bar** — check it's running with `pgrep -x AIQuotas`. If your menu bar
 is crowded, macOS may have hidden the item; try widening it or quitting another menu bar app.
@@ -185,9 +192,9 @@ Sources/AIQuotas/
   QuotaPanel.swift           the dropdown UI
   QuotaStore.swift           refresh timer, parallel fetch, preferences
   Models.swift               QuotaWindow / ProviderResult
-  Credentials.swift          keychain via /usr/bin/security, OAuth plumbing
+  Credentials.swift          read-only keychain and local configuration helpers
   ClaudeProvider.swift       Anthropic
-  CodexProvider.swift        OpenAI / ChatGPT
+  CodexProvider.swift        OpenAI / ChatGPT through Codex app-server
   LoginItem.swift            launch at login
 build.sh                     compiles, bundles, ad-hoc signs
 ```

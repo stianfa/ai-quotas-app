@@ -1,9 +1,7 @@
 import Foundation
-import Security
 
-/// Reads the logins the Claude Code and Codex CLIs already wrote, and keeps their
-/// access tokens fresh. Tokens are written back to the same stores so this app and
-/// the CLIs stay in sync rather than invalidating each other.
+/// Read-only access to local CLI configuration. Credential stores belong to their
+/// respective CLIs; AI Quotas never mutates them.
 enum Credentials {
 
     // MARK: - Keychain
@@ -43,33 +41,6 @@ enum Credentials {
         return text.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8)
     }
 
-    /// Writes a keychain secret via `/usr/bin/security`, for the same reason as
-    /// `keychainRead` — it keeps the trusted Apple-signed binary as the only
-    /// accessor, so refreshing a token never raises a permission prompt.
-    ///
-    @discardableResult
-    static func keychainWrite(service: String, account: String, data: Data) -> Bool {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        // -U updates in place, preserving the item's existing ACL.
-        // -X takes the secret as hex, which avoids the quoting hazards of raw JSON.
-        proc.arguments = [
-            "add-generic-password", "-U",
-            "-s", service, "-a", account,
-            "-X", data.map { String(format: "%02X", $0) }.joined(),
-        ]
-        proc.standardOutput = Pipe()
-        proc.standardError = Pipe()
-
-        do {
-            try proc.run()
-        } catch {
-            return false
-        }
-        proc.waitUntilExit()
-        return proc.terminationStatus == 0
-    }
-
     // MARK: - Files
 
     static var home: URL { URL(fileURLWithPath: NSHomeDirectory()) }
@@ -79,19 +50,6 @@ enum Credentials {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         return obj
-    }
-
-    /// Write via a temp file + rename so a crash can't leave a half-written credential file.
-    static func writeJSONAtomic(_ url: URL, _ object: [String: Any]) {
-        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted]) else { return }
-        let tmp = url.appendingPathExtension("tmp-\(ProcessInfo.processInfo.processIdentifier)")
-        do {
-            try data.write(to: tmp, options: .atomic)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tmp.path)
-            _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
-        } catch {
-            try? FileManager.default.removeItem(at: tmp)
-        }
     }
 
     /// Reads a top-level `key = "value"` from a TOML file, stopping at the first table
@@ -114,20 +72,6 @@ enum Credentials {
         return nil
     }
 
-    /// Milliseconds-since-epoch of a JWT's `exp`, used to refresh before expiry.
-    static func jwtExpiryMS(_ token: String) -> Double? {
-        let parts = token.split(separator: ".")
-        guard parts.count >= 2 else { return nil }
-        var b64 = String(parts[1])
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        while b64.count % 4 != 0 { b64 += "=" }
-        guard let data = Data(base64Encoded: b64),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let exp = obj["exp"] as? Double
-        else { return nil }
-        return exp * 1000
-    }
 }
 
 /// Shared URLSession with sane timeouts — a hung provider must not freeze the menu.
