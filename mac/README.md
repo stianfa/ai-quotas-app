@@ -56,7 +56,7 @@ Click the menu bar item → **Settings…**
 | Bar height | 7 pt | 3–22. Capped at 22 because that's the menu bar's height. |
 | Show percentages | on | Off gives bars only. |
 | Show time until reset | on | The dimmed `6d` / `4h` before each bar. |
-| Nudge left | 10 pt | 0–600. Blank padding on the right that shifts the readout leftward — see below. |
+| Nudge left | 10 pt | 0–2,000. Blank padding on the right that shifts the readout leftward — see below. |
 | Refresh every | 5 minutes | 1 min – 1 hour. |
 | Launch at login | off | |
 
@@ -105,8 +105,9 @@ Each provider is checked locally through its installed CLI session:
 Cost is effectively zero, but these do count as requests against your account — which is why
 the default refresh is 5 minutes rather than continuous.
 
-AI Quotas never writes either CLI's credential store. If the Claude token expires, run `claude`
-once and refresh the app.
+The app refreshes Claude's OAuth session shortly before its access token expires. It uses Claude
+Code's refresh lock and writes the rotated token back to the same credential store so both apps
+stay in sync. Codex continues to own its authentication through app-server.
 
 If Codex is unreachable, it falls back to the newest rate-limit snapshot in `~/.codex/sessions`
 and marks the card `cached`.
@@ -137,12 +138,14 @@ to the certificate rather than the cdhash. That's sound for apps storing their *
 but it doesn't help here: it can't retroactively add a new identity to an ACL that Claude Code
 already wrote.
 
-**The fix used here:** read the keychain by shelling out to `/usr/bin/security` — the exact
-Apple-signed binary the item already trusts. The trusted binary performs the read, so there's
-no prompt on any build. It's also how the Claude Code CLI reads it. See `keychainRead` in
-`Sources/AIQuotas/Credentials.swift`.
+**The fix used here:** access the keychain by shelling out to `/usr/bin/security` — the exact
+Apple-signed binary the item already trusts. The trusted binary performs reads and the narrowly
+scoped OAuth refresh update, so there's no prompt on every build. It's also how Claude Code
+accesses the item. See `Sources/AIQuotas/Credentials.swift`.
 
-The keychain access is read-only; AI Quotas never updates or replaces the item.
+AI Quotas updates only Claude's OAuth fields after a successful refresh. It takes Claude Code's
+`.oauth_refresh.lock`, re-reads the credential after acquiring it, and atomically updates the
+existing item so it cannot overwrite a refresh performed concurrently by the CLI.
 
 ## Privacy and provider support
 
@@ -192,7 +195,7 @@ Sources/AIQuotas/
   QuotaPanel.swift           the dropdown UI
   QuotaStore.swift           refresh timer, parallel fetch, preferences
   Models.swift               QuotaWindow / ProviderResult
-  Credentials.swift          read-only keychain and local configuration helpers
+  Credentials.swift          keychain and local configuration helpers
   ClaudeProvider.swift       Anthropic
   CodexProvider.swift        OpenAI / ChatGPT through Codex app-server
   LoginItem.swift            launch at login

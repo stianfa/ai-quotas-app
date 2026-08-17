@@ -6,6 +6,8 @@ import SwiftUI
 /// so one slow or failing provider never hides the others.
 @MainActor
 final class QuotaStore: ObservableObject {
+    static let maxTrailingInset: Double = 2_000
+
     @Published private(set) var snapshot: Snapshot = .empty
     @Published private(set) var isRefreshing = false
     /// Ticks every 30s purely so "resets in …" labels stay honest between fetches.

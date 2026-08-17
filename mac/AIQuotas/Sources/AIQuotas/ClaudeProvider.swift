@@ -5,43 +5,205 @@ import Foundation
 enum ClaudeProvider {
     private static let service = "Claude Code-credentials"
     private static let api = URL(string: "https://api.anthropic.com/v1/messages")!
+    private static let tokenAPI = URL(string: "https://platform.claude.com/v1/oauth/token")!
+    private static let defaultClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     private static let systemPrompt = "You are Claude Code, Anthropic's official CLI for Claude."
+    private static let refreshLeeway: TimeInterval = 5 * 60
 
     private static var credsFile: URL {
         Credentials.home.appendingPathComponent(".claude/.credentials.json")
     }
 
-    private struct Store {
+    private enum StoreLocation: Sendable {
+        case keychain
+        case file
+    }
+
+    /// JSONSerialization values are immutable JSON scalars, arrays, and
+    /// dictionaries. A Store stays inside one refresh task and is never shared.
+    private struct Store: @unchecked Sendable {
+        var root: [String: Any]
         var oauth: [String: Any]
+        var location: StoreLocation
+    }
+
+    private struct RefreshResponse: Decodable, Sendable {
+        let accessToken: String
+        let refreshToken: String?
+        let expiresIn: Double
+        let refreshTokenExpiresIn: Double?
+        let scope: String?
+
+        enum CodingKeys: String, CodingKey {
+            case accessToken = "access_token"
+            case refreshToken = "refresh_token"
+            case expiresIn = "expires_in"
+            case refreshTokenExpiresIn = "refresh_token_expires_in"
+            case scope
+        }
+    }
+
+    /// Claude Code uses this directory lock before rotating its OAuth token. By
+    /// taking the same lock, AI Quotas cannot race the CLI's credential update.
+    private struct RefreshLock: Sendable {
+        let url: URL
+
+        static func acquire() async throws -> RefreshLock {
+            let fm = FileManager.default
+            let url = Credentials.home.appendingPathComponent(".claude/.oauth_refresh.lock")
+
+            for attempt in 0..<6 {
+                do {
+                    try fm.createDirectory(at: url, withIntermediateDirectories: false)
+                    return RefreshLock(url: url)
+                } catch {
+                    if let attrs = try? fm.attributesOfItem(atPath: url.path),
+                       let modified = attrs[.modificationDate] as? Date,
+                       Date().timeIntervalSince(modified) > 60 {
+                        try? fm.removeItem(at: url)
+                        continue
+                    }
+                    guard attempt < 5 else {
+                        throw QuotaError.authFailed(
+                            "Claude credential refresh is busy — try again shortly"
+                        )
+                    }
+                    try await Task.sleep(
+                        nanoseconds: UInt64.random(in: 1_000_000_000...2_000_000_000)
+                    )
+                }
+            }
+            throw QuotaError.authFailed("Claude credential refresh is busy")
+        }
+
+        func release() {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     private static func load() -> Store? {
         if let data = Credentials.keychainRead(service: service),
            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let oauth = root["claudeAiOauth"] as? [String: Any] {
-            return Store(oauth: oauth)
+            return Store(root: root, oauth: oauth, location: .keychain)
         }
         if let root = Credentials.readJSON(credsFile),
            let oauth = root["claudeAiOauth"] as? [String: Any] {
-            return Store(oauth: oauth)
+            return Store(root: root, oauth: oauth, location: .file)
         }
         return nil
     }
 
-    private static func accessToken() throws -> String {
-        guard let store = load() else {
+    private static func persist(_ store: Store) -> Bool {
+        var root = store.root
+        root["claudeAiOauth"] = store.oauth
+        guard JSONSerialization.isValidJSONObject(root),
+              let data = try? JSONSerialization.data(withJSONObject: root)
+        else { return false }
+
+        switch store.location {
+        case .keychain:
+            return Credentials.keychainWrite(service: service, data: data)
+        case .file:
+            return Credentials.writeJSON(root, to: credsFile)
+        }
+    }
+
+    private static func expiry(_ oauth: [String: Any], key: String) -> Double? {
+        (oauth[key] as? NSNumber)?.doubleValue
+    }
+
+    private static func tokenIsFresh(_ oauth: [String: Any], now: Date = Date()) -> Bool {
+        guard let expiresAt = expiry(oauth, key: "expiresAt") else { return true }
+        return expiresAt - now.timeIntervalSince1970 * 1000 > refreshLeeway * 1000
+    }
+
+    private static func accessToken() async throws -> String {
+        guard let initial = load() else {
             throw QuotaError.noCredentials("no Claude Code credentials found")
         }
-        // Claude Code owns its rotating refresh token. Staying read-only avoids
-        // racing the CLI and accidentally overwriting a newer login.
-        if let expiresAt = store.oauth["expiresAt"] as? Double,
-           expiresAt - Date().timeIntervalSince1970 * 1000 < 60_000 {
-            throw QuotaError.authFailed("Claude Code login needs refreshing — run `claude` once")
+
+        if tokenIsFresh(initial.oauth),
+           let token = initial.oauth["accessToken"] as? String {
+            return token
         }
-        guard let token = store.oauth["accessToken"] as? String else {
-            throw QuotaError.noCredentials("no access token in credentials")
+
+        let lock = try await RefreshLock.acquire()
+        defer { lock.release() }
+
+        // Re-read after taking Claude Code's lock: the CLI may have refreshed
+        // while this app was waiting.
+        guard var current = load() else {
+            throw QuotaError.noCredentials("no Claude Code credentials found")
         }
-        return token
+        if let token = current.oauth["accessToken"] as? String,
+           tokenIsFresh(current.oauth) {
+            return token
+        }
+
+        guard let refreshToken = current.oauth["refreshToken"] as? String,
+              !refreshToken.isEmpty else {
+            throw QuotaError.authFailed("Claude login cannot be refreshed — run `claude` to sign in")
+        }
+        if let refreshExpiresAt = expiry(current.oauth, key: "refreshTokenExpiresAt"),
+           refreshExpiresAt <= Date().timeIntervalSince1970 * 1000 {
+            throw QuotaError.authFailed("Claude login expired — run `claude` to sign in again")
+        }
+
+        var payload: [String: Any] = [
+            "grant_type": "refresh_token",
+            "refresh_token": refreshToken,
+            "client_id": current.oauth["clientId"] as? String ?? defaultClientID,
+        ]
+        if let scopes = current.oauth["scopes"] as? [String], !scopes.isEmpty {
+            payload["scope"] = scopes.joined(separator: " ")
+        }
+
+        var req = URLRequest(url: tokenAPI)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let response: RefreshResponse
+        do {
+            let (body, rawResponse) = try await quotaSession.data(for: req)
+            guard let http = rawResponse as? HTTPURLResponse else {
+                throw QuotaError.authFailed("unexpected Claude token-refresh response")
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let detail = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])
+                let reason = detail?["error_description"] as? String
+                    ?? detail?["error"] as? String
+                let suffix = reason.map { ": \($0.prefix(160))" } ?? ""
+                throw QuotaError.authFailed(
+                    "Claude token refresh failed (HTTP \(http.statusCode))\(suffix)"
+                )
+            }
+            response = try JSONDecoder().decode(RefreshResponse.self, from: body)
+        } catch let error as QuotaError {
+            throw error
+        } catch {
+            throw QuotaError.authFailed("Claude token refresh failed: \(error.localizedDescription)")
+        }
+
+        let nowMilliseconds = Date().timeIntervalSince1970 * 1000
+        current.oauth["accessToken"] = response.accessToken
+        current.oauth["refreshToken"] = response.refreshToken ?? refreshToken
+        current.oauth["expiresAt"] = nowMilliseconds + response.expiresIn * 1000
+        if let refreshSeconds = response.refreshTokenExpiresIn {
+            current.oauth["refreshTokenExpiresAt"] = nowMilliseconds + refreshSeconds * 1000
+        }
+        if let scope = response.scope {
+            current.oauth["scopes"] = scope.split(separator: " ").map(String.init)
+        }
+
+        guard persist(current) else {
+            throw QuotaError.authFailed(
+                "Claude token refreshed but could not be saved — run `claude` once"
+            )
+        }
+        Diagnostics.log("refreshed Claude OAuth token")
+        return response.accessToken
     }
 
     static func fetch() async -> ProviderResult {
@@ -49,10 +211,10 @@ enum ClaudeProvider {
 
         let token: String
         do {
-            token = try accessToken()
+            token = try await accessToken()
         } catch {
             result.error = error.localizedDescription
-            result.hint = "Install Claude Code and sign in — this reads the same login."
+            result.hint = "Install Claude Code and sign in; AI Quotas refreshes that session when needed."
             return result
         }
 

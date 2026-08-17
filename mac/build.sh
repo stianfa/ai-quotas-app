@@ -43,10 +43,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc is fine here. Claude credentials are read-only through /usr/bin/security,
-# the Apple-signed binary the Claude Code keychain item already trusts (see
-# Credentials.keychainRead). That avoids repeat prompts as the app's ad-hoc code
-# identity changes between builds.
+# Ad-hoc is fine here. Claude credential reads and OAuth refresh writes go through
+# /usr/bin/security, the Apple-signed binary the Claude Code keychain item already
+# trusts (see Credentials.swift). That avoids repeat prompts as the app's ad-hoc
+# code identity changes between builds.
 echo "→ Signing (ad-hoc)…"
 codesign --force --deep --sign - "$APP" 2>/dev/null
 

@@ -112,8 +112,10 @@ Each provider is checked locally through its installed CLI session:
   for `account/rateLimits/read`. The Codex CLI owns authentication and token refresh, and no model
   response is generated.
 
-AI Quotas never writes either CLI's credential store. Codex refreshes its own session through
-app-server. If the Claude token expires, run `claude` once and refresh AI Quotas.
+The macOS app refreshes Claude's OAuth session shortly before its access token expires, using
+Claude Code's refresh lock and updating the same Keychain item with the rotated credentials.
+Codex refreshes its own session through app-server. The Node CLI remains read-only and asks
+Claude Code to refresh an expired session.
 
 If Codex can't be reached, it falls back to the most recent quota snapshot in your session logs and
 marks the card `cached` so you know it isn't live.
@@ -129,7 +131,7 @@ Nothing is copied into this repository or an AI Quotas data store, and tokens ar
 
 | Provider | Access |
 |---|---|
-| Claude | Read-only from macOS keychain service `Claude Code-credentials` (falling back to `~/.claude/.credentials.json`), then sent only to Anthropic |
+| Claude | From macOS keychain service `Claude Code-credentials` (falling back to `~/.claude/.credentials.json`), then sent only to Anthropic. The macOS app persists OAuth token rotation back to that same store. |
 | Codex | Through the local `codex app-server`; AI Quotas does not read `auth.json` directly |
 
 The local server binds to `127.0.0.1` only.

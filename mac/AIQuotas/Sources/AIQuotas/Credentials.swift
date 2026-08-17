@@ -1,7 +1,7 @@
 import Foundation
 
-/// Read-only access to local CLI configuration. Credential stores belong to their
-/// respective CLIs; AI Quotas never mutates them.
+/// Access to local CLI configuration. Reads and the narrowly-scoped Claude OAuth
+/// refresh write go through the same system tools and files used by the owning CLI.
 enum Credentials {
 
     // MARK: - Keychain
@@ -41,6 +41,32 @@ enum Credentials {
         return text.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8)
     }
 
+    /// Updates an existing generic-password item through the Apple-signed
+    /// `/usr/bin/security` process. `-U` preserves the item's ACL, so rebuilding
+    /// this ad-hoc-signed app does not create a new Keychain access prompt.
+    static func keychainWrite(service: String, account: String = "default", data: Data) -> Bool {
+        guard let secret = String(data: data, encoding: .utf8) else { return false }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        proc.arguments = [
+            "add-generic-password", "-U",
+            "-s", service,
+            "-a", account,
+            "-w", secret,
+        ]
+        proc.standardOutput = Pipe()
+        proc.standardError = Pipe()
+
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            return proc.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
+
     // MARK: - Files
 
     static var home: URL { URL(fileURLWithPath: NSHomeDirectory()) }
@@ -50,6 +76,23 @@ enum Credentials {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         return obj
+    }
+
+    /// Atomically replaces a JSON credential file while keeping it private to
+    /// the current user, matching Claude Code's file-store permissions.
+    static func writeJSON(_ object: [String: Any], to url: URL) -> Bool {
+        guard JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object)
+        else { return false }
+        do {
+            try data.write(to: url, options: .atomic)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: url.path
+            )
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// Reads a top-level `key = "value"` from a TOML file, stopping at the first table

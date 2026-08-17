@@ -65,7 +65,7 @@ struct SettingsView: View {
                 Toggle("Show percentages", isOn: $store.showPercentText)
                 Toggle("Show time until reset", isOn: $store.showReset)
 
-                Slider(value: $store.trailingInset, in: 0...600, step: 10) {
+                Slider(value: $store.trailingInset, in: 0...QuotaStore.maxTrailingInset, step: 10) {
                     Text("Nudge left — \(Int(store.trailingInset)) pt")
                         .monospacedDigit()
                 }
