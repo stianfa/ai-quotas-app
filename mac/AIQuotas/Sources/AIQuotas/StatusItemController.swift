@@ -79,11 +79,14 @@ final class StatusItemController {
         }
 
         let entries = providers.map { p in
-            MenuBarRenderer.Entry(
+            let windows = p.isOK ? barWindows(for: p) : []
+            let main = windows.first
+            return MenuBarRenderer.Entry(
                 tag: store.label(for: p.id),
-                percent: p.isOK ? p.headline?.usedPercent : nil,
-                // The countdown belongs to the same window the bar shows.
-                reset: p.isOK ? compactReset(p.headline?.resetsAt, now: store.now) : nil
+                percent: main?.usedPercent,
+                // The countdown belongs to the window the solid fill shows.
+                reset: compactReset(main?.resetsAt, now: store.now),
+                background: windows.dropFirst().first?.usedPercent
             )
         }
         let style = MenuBarRenderer.Style(
@@ -94,6 +97,21 @@ final class StatusItemController {
             trailingInset: store.trailingInset
         )
         button.image = MenuBarRenderer.image(for: entries, style: style)
+    }
+
+    /// The windows a provider shows in the menu bar: the first as the solid fill,
+    /// an optional second as the faint fill behind it. Claude shows its 5-hour
+    /// window inside its 7-day one; overage stays in the panel, because it tracks
+    /// spend beyond the plan and would otherwise take over the bar whenever it was
+    /// highest.
+    private func barWindows(for p: ProviderResult) -> [QuotaWindow] {
+        if p.id == "claude" {
+            let shared = ["five_hour", "seven_day"].compactMap { id in
+                p.windows.first { $0.id == id && $0.usedPercent != nil }
+            }
+            if !shared.isEmpty { return shared }
+        }
+        return p.headline.map { [$0] } ?? []
     }
 
     private var tooltip: String {

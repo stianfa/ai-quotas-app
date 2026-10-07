@@ -11,11 +11,15 @@ enum MenuBarRenderer {
         let tag: String          // e.g. "Claude" — empty to omit the label
         let percent: Double?     // nil renders an em dash instead of a bar
         var reset: String?       // compact countdown, e.g. "6d" — nil to omit
+        /// A second, longer-horizon value sharing the same bar: drawn as a faint
+        /// full-height fill, with `percent` as a thinner solid fill inside it.
+        var background: Double?
 
-        init(tag: String, percent: Double?, reset: String? = nil) {
+        init(tag: String, percent: Double?, reset: String? = nil, background: Double? = nil) {
             self.tag = tag
             self.percent = percent
             self.reset = reset
+            self.background = background
         }
     }
 
@@ -82,6 +86,48 @@ enum MenuBarRenderer {
     /// "23h" is the widest realistic case (days/hours/minutes are ≤ 2 digits).
     private static var resetBoxWidth: CGFloat { widthOfReset("23h") }
 
+    /// Fixed box for the percentage so the layout doesn't shift as the number
+    /// changes. Two values read "34/81%", so they reserve room for both.
+    private static func percentBoxWidth(_ e: Entry) -> CGFloat {
+        widthOf(e.background == nil ? "100%" : "100/100%")
+    }
+
+    private static func percentLabel(_ e: Entry, _ pct: Double) -> String {
+        guard let bg = e.background else { return "\(Int(pct.rounded()))%" }
+        return "\(Int(pct.rounded()))/\(Int(bg.rounded()))%"
+    }
+
+    /// Opacity of the background fill — dim enough that the solid inner fill
+    /// stays the obvious one, but its own colour still shows the level.
+    private static let backgroundAlpha: CGFloat = 0.35
+    /// The inner fill's share of the bar's height when a background is drawn.
+    private static let innerHeightRatio: CGFloat = 0.5
+
+    /// Fill: one fixed green→red ramp spanning the *whole* track, revealed only up
+    /// to the current level. Scaling the ramp to the fill instead would squeeze
+    /// green→red into a few pixels at low percentages, so every small value would
+    /// look the same muddy colour.
+    private static func drawFill(x: CGFloat, y: CGFloat, trackWidth: CGFloat,
+                                 height: CGFloat, fraction: Double) {
+        guard fraction > 0 else { return }
+        let radius = height / 2
+        // Floor the width so a low value is still a visible sliver rather than a
+        // dot lost against the track.
+        let fillWidth = max(height + 2, trackWidth * fraction)
+        let fillRect = NSRect(x: x, y: y, width: fillWidth, height: height)
+
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(roundedRect: fillRect, xRadius: radius, yRadius: radius).addClip()
+        let gradient = NSGradient(colors: [
+            color(for: 0.0),    // green at empty
+            color(for: 0.55),
+            color(for: 0.8),    // amber
+            color(for: 1.0),    // red at full
+        ])
+        gradient?.draw(in: NSRect(x: x, y: y, width: trackWidth, height: height), angle: 0)
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
     @MainActor
     static func image(for entries: [Entry], style: Style = Style()) -> NSImage? {
         guard !entries.isEmpty else { return nil }
@@ -110,7 +156,7 @@ enum MenuBarRenderer {
                     total += resetBoxWidth + gapAfterReset
                 }
                 total += barWidth
-                if style.showPercentText { total += gapAfterBar + widthOf("100%") }
+                if style.showPercentText { total += gapAfterBar + percentBoxWidth(e) }
             }
             if i < entries.count - 1 { total += gapBetweenEntries }
         }
@@ -177,39 +223,30 @@ enum MenuBarRenderer {
                 trackColor.setFill()
                 NSBezierPath(roundedRect: trackRect, xRadius: radius, yRadius: radius).fill()
 
-                // Fill: one fixed green→red ramp spanning the *whole* track, revealed
-                // only up to the current level. Scaling the ramp to the fill instead
-                // would squeeze green→red into a few pixels at low percentages, so
-                // every small value would look the same muddy colour.
-                if fraction > 0 {
-                    // Floor the width so a low value is still a visible sliver
-                    // rather than a dot lost against the track.
-                    let fillWidth = max(barHeight + 2, barWidth * fraction)
-                    let fillRect = NSRect(x: x, y: trackRect.minY,
-                                          width: fillWidth, height: barHeight)
-
+                if let bg = e.background {
+                    // Faint, full height, behind everything else.
                     NSGraphicsContext.saveGraphicsState()
-                    NSBezierPath(roundedRect: fillRect, xRadius: radius, yRadius: radius)
-                        .addClip()
-                    let gradient = NSGradient(colors: [
-                        color(for: 0.0),    // green at empty
-                        color(for: 0.55),
-                        color(for: 0.8),    // amber
-                        color(for: 1.0),    // red at full
-                    ])
-                    gradient?.draw(in: NSRect(x: x, y: trackRect.minY,
-                                              width: barWidth, height: barHeight),
-                                   angle: 0)
+                    NSGraphicsContext.current?.cgContext.setAlpha(backgroundAlpha)
+                    drawFill(x: x, y: trackRect.minY, trackWidth: barWidth,
+                             height: barHeight, fraction: max(0, min(1, bg / 100)))
                     NSGraphicsContext.restoreGraphicsState()
+
+                    // Solid and thinner, centred inside the background fill.
+                    let inner = max(2, (barHeight * innerHeightRatio).rounded())
+                    drawFill(x: x, y: (height - inner) / 2, trackWidth: barWidth,
+                             height: inner, fraction: fraction)
+                } else {
+                    drawFill(x: x, y: trackRect.minY, trackWidth: barWidth,
+                             height: barHeight, fraction: fraction)
                 }
                 x += barWidth
 
                 if style.showPercentText {
                     x += gapAfterBar
-                    // Right-aligned in a fixed "100%" box so the layout doesn't
-                    // shift as the number grows or shrinks.
-                    let label = "\(Int(pct.rounded()))%" as NSString
-                    let boxWidth = widthOf("100%")
+                    // Right-aligned in a fixed box so the layout doesn't shift as
+                    // the number grows or shrinks.
+                    let label = percentLabel(e, pct) as NSString
+                    let boxWidth = percentBoxWidth(e)
                     let lSize = label.size(withAttributes: attrs)
                     label.draw(at: NSPoint(x: x + boxWidth - lSize.width,
                                            y: (height - lSize.height) / 2),

@@ -81,8 +81,10 @@ Two limits worth knowing:
 
 ## Reading the display
 
-Each provider's bar shows its **highest** window — usually the 5-hour for Claude, the weekly
-for Codex. Open the panel for every window individually.
+Claude shows both windows in one bar: the 7-day window as a faint full-height fill, and the
+5-hour session as a thinner solid fill inside it. The text reads `5-hour/7-day`, e.g. `34/81%`,
+and the countdown is for the 5-hour window. Codex shows its **highest** window, usually the
+weekly. Overage never appears in the menu bar. Open the panel for every window individually.
 
 - **Claude** — 5-hour session, 7-day, and overage if your plan has it
 - **Codex** — your plan's primary window (weekly on Team), plus a secondary if present
