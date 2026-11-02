@@ -41,10 +41,52 @@ enum Credentials {
         return text.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8)
     }
 
+    /// The account name the existing item for `service` is filed under.
+    ///
+    /// `keychainRead` finds items by service alone, so the account has to be read
+    /// back off the item. It matters for writes: `-U` matches on service *and*
+    /// account, so updating under the wrong name does not update anything. It
+    /// silently creates a second item that nothing reads, while the owning CLI
+    /// carries on using the first. Returns nil rather than guessing, so a caller
+    /// can refuse to write instead of scattering duplicates.
+    static func keychainAccount(service: String) -> String? {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        proc.arguments = ["find-generic-password", "-s", service]
+
+        let out = Pipe()
+        proc.standardOutput = out
+        proc.standardError = Pipe()
+
+        do { try proc.run() } catch { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+
+        guard proc.terminationStatus == 0,
+              let text = String(data: data, encoding: .utf8) else { return nil }
+
+        // Attribute lines look like:  "acct"<blob>="alex"
+        // A non-ASCII account prints as hex instead and won't match, which is the
+        // safe outcome: nil means "don't write".
+        for rawLine in text.split(separator: "\n") {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("\"acct\""), let equals = line.firstIndex(of: "=") else { continue }
+            var value = String(line[line.index(after: equals)...])
+            guard value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") else { continue }
+            value.removeFirst()
+            value.removeLast()
+            return value.isEmpty ? nil : value
+        }
+        return nil
+    }
+
     /// Updates an existing generic-password item through the Apple-signed
     /// `/usr/bin/security` process. `-U` preserves the item's ACL, so rebuilding
     /// this ad-hoc-signed app does not create a new Keychain access prompt.
-    static func keychainWrite(service: String, account: String = "default", data: Data) -> Bool {
+    ///
+    /// `account` must be the one the target item already uses. Pass the result of
+    /// `keychainAccount(service:)`, never a guess.
+    static func keychainWrite(service: String, account: String, data: Data) -> Bool {
         guard let secret = String(data: data, encoding: .utf8) else { return false }
 
         let proc = Process()

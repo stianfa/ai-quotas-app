@@ -15,7 +15,12 @@ enum ClaudeProvider {
     }
 
     private enum StoreLocation: Sendable {
-        case keychain
+        /// Carries the account the item was read from, captured at read time. A
+        /// keychain update matches on service *and* account, so writing under any
+        /// other name creates a second item instead of updating this one, leaving
+        /// the CLI reading credentials we have already invalidated. nil means the
+        /// account could not be determined, and nothing may be written.
+        case keychain(account: String?)
         case file
     }
 
@@ -85,7 +90,8 @@ enum ClaudeProvider {
         if let data = Credentials.keychainRead(service: service),
            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let oauth = root["claudeAiOauth"] as? [String: Any] {
-            return Store(root: root, oauth: oauth, location: .keychain)
+            return Store(root: root, oauth: oauth,
+                         location: .keychain(account: Credentials.keychainAccount(service: service)))
         }
         if let root = Credentials.readJSON(credsFile),
            let oauth = root["claudeAiOauth"] as? [String: Any] {
@@ -102,8 +108,9 @@ enum ClaudeProvider {
         else { return false }
 
         switch store.location {
-        case .keychain:
-            return Credentials.keychainWrite(service: service, data: data)
+        case .keychain(let account):
+            guard let account else { return false }
+            return Credentials.keychainWrite(service: service, account: account, data: data)
         case .file:
             return Credentials.writeJSON(root, to: credsFile)
         }
@@ -148,6 +155,16 @@ enum ClaudeProvider {
         if let refreshExpiresAt = expiry(current.oauth, key: "refreshTokenExpiresAt"),
            refreshExpiresAt <= Date().timeIntervalSince1970 * 1000 {
             throw QuotaError.authFailed("Claude login expired — run `claude` to sign in again")
+        }
+
+        // Work out where the replacement will be written *before* redeeming
+        // anything. Redeeming invalidates the current refresh token server-side,
+        // so finding out afterwards that there is nowhere to put the new one
+        // leaves the store holding a dead token: a real logout, not a stale one.
+        if case .keychain(let account) = current.location, account == nil {
+            throw QuotaError.authFailed(
+                "Claude keychain item not found — run `claude` to sign in"
+            )
         }
 
         var payload: [String: Any] = [

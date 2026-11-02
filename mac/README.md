@@ -149,6 +149,12 @@ AI Quotas updates only Claude's OAuth fields after a successful refresh. It take
 `.oauth_refresh.lock`, re-reads the credential after acquiring it, and atomically updates the
 existing item so it cannot overwrite a refresh performed concurrently by the CLI.
 
+The update goes to the same item it read. `-U` matches on service *and* account, so an update
+under the wrong account name creates a second item rather than changing the first. The account
+is therefore read off the existing item and carried along with the credentials. If it cannot be
+determined, the refresh is abandoned before the token is redeemed, because redeeming and then
+failing to save is what turns an expired login into a broken one.
+
 ## Privacy and provider support
 
 - AI Quotas has no telemetry, analytics, remote server, or account system. Quota results remain
