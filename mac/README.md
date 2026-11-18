@@ -6,7 +6,7 @@ Your Claude and Codex usage limits, always visible in the menu bar:
 Claude 4h ▰▰▱▱▱▱ 30%    Codex 6d ▰▰▰▰▱▱ 72%
 ```
 
-Click for the full breakdown. Bars run green → amber → red as you approach a limit, and the
+Click the bars to refresh your quotas and open or close the full breakdown. Bars run green → amber → red as you approach a limit, and the
 dimmed `4h` / `6d` before each bar is how long until that window resets.
 
 Native Swift/SwiftUI, no third-party dependencies, and no AI Quotas cloud service.
