@@ -198,13 +198,12 @@ final class StatusItemController {
     }
 
     @objc private func togglePopover() {
+        Task { await store.refresh() }
         if popover.isShown {
             popover.performClose(nil)
             return
         }
         guard let button = statusItem.button else { return }
-        // Refresh on open so the panel never shows a stale snapshot.
-        Task { await store.refresh() }
         // Anchor to the visible content, not the full button: the trailing inset is
         // blank padding, and using the whole width would offset the popover to the
         // right of the bars the user actually clicked.
