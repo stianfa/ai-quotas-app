@@ -56,7 +56,8 @@ Click the menu bar item → **Settings…**
 | Bar height | 7 pt | 3–22. Capped at 22 because that's the menu bar's height. |
 | Show percentages | on | Off gives bars only. |
 | Show time until reset | on | The dimmed `6d` / `4h` before each bar. |
-| Nudge left | 10 pt | 0–2,000. Blank padding on the right that shifts the readout leftward — see below. |
+| Center on screen | off | Automatically adjusts the right padding to center the bars as the display or neighboring items change. A camera notch places the target just to its right. |
+| Nudge left | 10 pt | 0–2,000. Used when centering is off. Blank padding on the right that shifts the readout leftward — see below. |
 | Refresh every | 5 minutes | 1 min – 1 hour. |
 | Launch at login | off | |
 

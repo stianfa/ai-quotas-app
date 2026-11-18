@@ -29,10 +29,6 @@ enum MenuBarRenderer {
         var barHeight: CGFloat = 7
         var showPercentText: Bool = true
         var showReset: Bool = true
-        /// Empty space padded onto the right of the image. Since macOS packs status
-        /// items right-to-left from the clock and offers no positioning API, padding
-        /// here is the only way to shift the visible content leftward.
-        var trailingInset: CGFloat = 10
     }
 
     /// The macOS menu bar is 22pt tall, so anything drawn beyond this gets clipped
@@ -48,7 +44,7 @@ enum MenuBarRenderer {
     /// Breathing room at the left end. The image otherwise butts straight up against
     /// whatever menu bar item sits beside it. macOS adds only a couple of points of
     /// its own, so this needs to be generous to read as separation.
-    private static let leadingInset: CGFloat = 10
+    static let leadingInset: CGFloat = 10
 
     private static let font = NSFont.monospacedDigitSystemFont(
         ofSize: 11, weight: .medium
@@ -145,7 +141,7 @@ enum MenuBarRenderer {
 
         // Measure first so the image is exactly wide enough — the status item is
         // variableLength, so a too-wide image would leave dead space.
-        var total: CGFloat = leadingInset + max(0, style.trailingInset)
+        var total: CGFloat = leadingInset
         for (i, e) in entries.enumerated() {
             if !e.tag.isEmpty { total += widthOf(e.tag) + gapAfterTag }
             if e.percent == nil {

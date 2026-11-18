@@ -65,11 +65,16 @@ struct SettingsView: View {
                 Toggle("Show percentages", isOn: $store.showPercentText)
                 Toggle("Show time until reset", isOn: $store.showReset)
 
+                Toggle("Center on screen", isOn: $store.centerOnScreen)
+
                 Slider(value: $store.trailingInset, in: 0...QuotaStore.maxTrailingInset, step: 10) {
                     Text("Nudge left — \(Int(store.trailingInset)) pt")
                         .monospacedDigit()
                 }
-                Text("Adds blank space on the right to shift the readout leftward. macOS gives no way to position a menu bar item directly, so this is the workaround.")
+                .disabled(store.centerOnScreen)
+                Text(store.centerOnScreen
+                     ? "Adjusts the spacing as the menu bar moves. On displays with a camera notch, the bars stay to its right."
+                     : "Adds blank space on the right to shift the bars left.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

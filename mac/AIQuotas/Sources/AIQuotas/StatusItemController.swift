@@ -18,6 +18,13 @@ final class StatusItemController {
     private let settings: SettingsWindowController
     private var cancellables = Set<AnyCancellable>()
 
+    private var contentImage: NSImage?
+    private var contentLeadingInset: CGFloat = 0
+    private var appliedPadding: CGFloat = 0
+    private var measuredLeftEdge: CGFloat?
+    private var measuredScreen: NSRect?
+    private var rightEdge: CGFloat = 0
+
     init(store: QuotaStore) {
         self.store = store
         self.settings = SettingsWindowController(store: store)
@@ -49,6 +56,21 @@ final class StatusItemController {
             .sink { [weak self] _ in self?.render() }
             .store(in: &cancellables)
 
+        // AppKit can reposition the status item when adjacent items change width.
+        // Coalesce move/resize pairs and measure after AppKit settles the layout.
+        let notifications = NotificationCenter.default
+        let windowChanges = [NSWindow.didMoveNotification, NSWindow.didResizeNotification,
+                             NSWindow.didChangeScreenNotification]
+        Publishers.MergeMany(windowChanges.map { notifications.publisher(for: $0) })
+        .filter { [weak self] note in
+            guard let window = note.object as? NSWindow else { return false }
+            return window === self?.statusItem.button?.window
+        }
+        .merge(with: notifications.publisher(for: NSApplication.didChangeScreenParametersNotification))
+        .debounce(for: .milliseconds(100), scheduler: RunLoop.main)
+        .sink { [weak self] _ in self?.updatePadding() }
+        .store(in: &cancellables)
+
         render()
     }
 
@@ -65,7 +87,7 @@ final class StatusItemController {
             // Pre-first-refresh: a plain template symbol, tinted by the system.
             let img = NSImage(systemSymbolName: "gauge.medium", accessibilityDescription: "AI Quotas")
             img?.isTemplate = true
-            button.image = img
+            display(img, leadingInset: 0)
             return
         }
 
@@ -74,7 +96,7 @@ final class StatusItemController {
             let img = NSImage(systemSymbolName: "exclamationmark.triangle",
                               accessibilityDescription: "AI Quotas — error")
             img?.isTemplate = true
-            button.image = img
+            display(img, leadingInset: 0)
             return
         }
 
@@ -93,10 +115,59 @@ final class StatusItemController {
             barWidth: store.barWidth,
             barHeight: store.barHeight,
             showPercentText: store.showPercentText,
-            showReset: store.showReset,
-            trailingInset: store.trailingInset
+            showReset: store.showReset
         )
-        button.image = MenuBarRenderer.image(for: entries, style: style)
+        display(MenuBarRenderer.image(for: entries, style: style),
+                leadingInset: MenuBarRenderer.leadingInset)
+    }
+
+    private func display(_ image: NSImage?, leadingInset: CGFloat) {
+        contentImage = image
+        contentLeadingInset = leadingInset
+        updatePadding(contentChanged: true)
+    }
+
+    private func updatePadding(contentChanged: Bool = false) {
+        guard let button = statusItem.button, let image = contentImage else { return }
+        let padding = store.centerOnScreen
+            ? centeredPadding(for: button, imageWidth: image.size.width)
+            : (contentLeadingInset == 0 ? 0 : max(0, store.trailingInset))
+        guard contentChanged || padding != appliedPadding else { return }
+        appliedPadding = padding
+        guard padding > 0 else {
+            button.image = image
+            return
+        }
+        let size = NSSize(width: image.size.width + padding, height: image.size.height)
+        let padded = NSImage(size: size, flipped: false) { _ in
+            image.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1)
+            return true
+        }
+        padded.isTemplate = image.isTemplate
+        button.image = padded
+    }
+
+    private func centeredPadding(for button: NSStatusBarButton, imageWidth: CGFloat) -> CGFloat {
+        guard let window = button.window, let screen = window.screen else { return 0 }
+        let frame = window.convertToScreen(button.convert(button.bounds, to: nil))
+        guard window.frame.height > 0, frame.width > 0, screen.frame.intersects(frame) else {
+            measuredLeftEdge = nil
+            return 0
+        }
+
+        let visibleWidth = imageWidth - contentLeadingInset
+        let target = max(screen.frame.midX,
+                         (screen.auxiliaryTopRightArea?.minX ?? screen.frame.minX) + visibleWidth / 2)
+        // Resizing first grows the local button to the right. The menu bar host
+        // moves its window left asynchronously. Sampling that transient right
+        // edge feeds our own padding back into the next measurement.
+        if measuredLeftEdge != frame.minX || measuredScreen != screen.frame {
+            let margin = max(0, min(12, (frame.width - (button.image?.size.width ?? frame.width)) / 2))
+            rightEdge = min(frame.maxX, screen.frame.maxX) - margin
+            measuredLeftEdge = frame.minX
+            measuredScreen = screen.frame
+        }
+        return max(0, (rightEdge - visibleWidth / 2 - target).rounded())
     }
 
     /// The windows a provider shows in the menu bar: the first as the solid fill,
@@ -138,7 +209,7 @@ final class StatusItemController {
         // blank padding, and using the whole width would offset the popover to the
         // right of the bars the user actually clicked.
         var anchor = button.bounds
-        anchor.size.width = max(1, anchor.width - CGFloat(store.trailingInset))
+        anchor.size.width = max(1, anchor.width - appliedPadding)
         popover.show(relativeTo: anchor, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
     }

@@ -43,6 +43,9 @@ final class QuotaStore: ObservableObject {
     @AppStorage("showReset") var showReset: Bool = true {
         willSet { objectWillChange.send() }
     }
+    @AppStorage("centerOnScreen") var centerOnScreen = false {
+        willSet { objectWillChange.send() }
+    }
     /// Blank space padded onto the right of the menu bar image. macOS packs status
     /// items right-to-left from the clock with no positioning API, so this is the
     /// only way to nudge the readout further left.
