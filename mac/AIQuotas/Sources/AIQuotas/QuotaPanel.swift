@@ -126,7 +126,17 @@ struct QuotaPanel: View {
                 .help("Refresh now")
             }
 
-            if store.snapshot.providers.isEmpty {
+            if !store.hasEnabledProviders {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("No providers enabled.")
+                        .font(.system(size: 12, weight: .medium))
+                    Text("Choose which providers to track in Settings…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 14)
+            } else if store.snapshot.providers.isEmpty {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text("Checking your quotas…")

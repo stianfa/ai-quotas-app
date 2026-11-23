@@ -17,6 +17,32 @@ final class QuotaStore: ObservableObject {
         didSet { restartTimer() }
     }
 
+    // MARK: - Tracked providers
+
+    @AppStorage("trackClaude") var trackClaude: Bool = true {
+        willSet { objectWillChange.send() }
+        didSet { handleTrackedProvidersChanged() }
+    }
+    @AppStorage("trackCodex") var trackCodex: Bool = true {
+        willSet { objectWillChange.send() }
+        didSet { handleTrackedProvidersChanged() }
+    }
+    @AppStorage("trackGemini") var trackGemini: Bool = true {
+        willSet { objectWillChange.send() }
+        didSet { handleTrackedProvidersChanged() }
+    }
+
+    var hasEnabledProviders: Bool { trackClaude || trackCodex || trackGemini }
+
+    func isTracked(_ providerID: String) -> Bool {
+        switch providerID {
+        case "claude": return trackClaude
+        case "codex": return trackCodex
+        case "gemini": return trackGemini
+        default: return false
+        }
+    }
+
     // MARK: - Menu bar appearance
     //
     // These drive MenuBarRenderer. `objectWillChange.send()` is explicit because
@@ -28,6 +54,9 @@ final class QuotaStore: ObservableObject {
         willSet { objectWillChange.send() }
     }
     @AppStorage("labelCodex") var labelCodex: String = "Codex" {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("labelGemini") var labelGemini: String = "Gemini" {
         willSet { objectWillChange.send() }
     }
     @AppStorage("barWidth") var barWidth: Double = 42 {
@@ -58,6 +87,7 @@ final class QuotaStore: ObservableObject {
         switch providerID {
         case "claude": return labelClaude
         case "codex": return labelCodex
+        case "gemini": return labelGemini
         default: return ""
         }
     }
@@ -66,6 +96,8 @@ final class QuotaStore: ObservableObject {
     private var clockTimer: Timer?
     /// When the in-flight refresh began, for the watchdog in `refresh()`.
     private var refreshStartedAt: Date?
+    /// Set when the user enables a provider while another refresh is in flight.
+    private var needsFollowUpRefresh = false
     /// Past this, an in-flight refresh is presumed dead and may be superseded.
     /// Comfortably above the providers' own 25s resource timeout.
     private static let refreshWatchdog: TimeInterval = 90
@@ -100,6 +132,25 @@ final class QuotaStore: ObservableObject {
         }
     }
 
+    private func handleTrackedProvidersChanged() {
+        // Hide unchecked providers right away rather than waiting for the next fetch.
+        snapshot = Snapshot(
+            providers: snapshot.providers.filter { isTracked($0.id) },
+            fetchedAt: snapshot.fetchedAt
+        )
+        let loaded = Set(snapshot.providers.map(\.id))
+        let missingEnabled = (trackClaude && !loaded.contains("claude"))
+            || (trackCodex && !loaded.contains("codex"))
+            || (trackGemini && !loaded.contains("gemini"))
+        guard missingEnabled else { return }
+
+        if isRefreshing {
+            needsFollowUpRefresh = true
+        } else {
+            Task { await refresh() }
+        }
+    }
+
     func refresh() async {
         // A refresh that never returns must not lock out every later attempt.
         // Providers own timeouts, but a hang below that layer (a continuation that
@@ -111,16 +162,33 @@ final class QuotaStore: ObservableObject {
             else { return }
             Diagnostics.log("previous refresh hung — starting a new one")
         }
+
+        let wantClaude = trackClaude
+        let wantCodex = trackCodex
+        let wantGemini = trackGemini
+        guard wantClaude || wantCodex || wantGemini else {
+            snapshot = Snapshot(providers: [], fetchedAt: Date())
+            now = Date()
+            Diagnostics.log("refreshed — no providers enabled")
+            return
+        }
+
         isRefreshing = true
         refreshStartedAt = Date()
+        var shouldFollowUp = false
         defer {
             isRefreshing = false
             refreshStartedAt = nil
+            if shouldFollowUp {
+                Task { @MainActor [weak self] in await self?.refresh() }
+            }
         }
 
-        async let claude = ClaudeProvider.fetch()
-        async let codex = CodexProvider.fetch()
-        let providers = await [claude, codex]
+        async let claude: ProviderResult? = wantClaude ? ClaudeProvider.fetch() : nil
+        async let codex: ProviderResult? = wantCodex ? CodexProvider.fetch() : nil
+        async let gemini: ProviderResult? = wantGemini ? GeminiProvider.fetch() : nil
+        let fetched = await [claude, codex, gemini].compactMap { $0 }
+        let providers = fetched.filter { isTracked($0.id) }
 
         snapshot = Snapshot(providers: providers, fetchedAt: Date())
         now = Date()
@@ -130,7 +198,12 @@ final class QuotaStore: ObservableObject {
             let pct = p.headline?.usedPercent.map { String(format: "%.0f%%", $0) } ?? "—"
             return "\(p.name)=\(pct)"
         }.joined(separator: " ")
-        Diagnostics.log("refreshed — \(summary)")
+        Diagnostics.log("refreshed — \(summary.isEmpty ? "no providers enabled" : summary)")
+
+        if needsFollowUpRefresh {
+            needsFollowUpRefresh = false
+            shouldFollowUp = true
+        }
     }
 
     /// Highest usage across every provider — what the menu bar shows at a glance.

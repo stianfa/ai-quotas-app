@@ -60,15 +60,16 @@ function render({ providers, fetchedAt }) {
       continue;
     }
 
+    const labelWidth = Math.max(16, ...p.windows.map((w) => w.label.length));
     for (const w of p.windows) {
       const pctText = w.usedPercent == null ? '  ? ' : `${String(Math.round(w.usedPercent)).padStart(3)}%`;
-      const label = w.label.padEnd(16);
+      const label = w.label.padEnd(labelWidth);
       lines.push(`    ${label} ${bar(w.usedPercent)} ${severity(w.usedPercent)(pctText)}  ${dim(untilText(w.resetsAt))}`);
     }
 
     const credits = p.extra?.credits;
     if (credits?.balance != null) {
-      lines.push(`    ${dim('credits'.padEnd(16))} ${credits.balance}`);
+      lines.push(`    ${dim('credits'.padEnd(labelWidth))} ${credits.balance}`);
     }
     lines.push('');
   }
@@ -76,14 +77,17 @@ function render({ providers, fetchedAt }) {
 }
 
 function parseArgs(argv) {
-  const args = { mode: 'cli', port: 4317, watch: 0, json: false, open: false };
+  const args = { mode: 'cli', port: 4317, watch: 0, json: false, open: false, providers: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--serve' || a === '-s') args.mode = 'serve';
     else if (a === '--json') args.json = true;
     else if (a === '--open' || a === '-o') args.open = true;
     else if (a === '--port' || a === '-p') args.port = Number(argv[++i]);
-    else if (a === '--watch' || a === '-w') {
+    else if (a === '--providers' || a === '-P') {
+      const raw = argv[++i] ?? '';
+      args.providers = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    } else if (a === '--watch' || a === '-w') {
       const next = Number(argv[i + 1]);
       // Bare --watch defaults to 60s; a following number overrides it.
       if (Number.isFinite(next) && next > 0) { args.watch = next; i++; }
@@ -94,20 +98,22 @@ function parseArgs(argv) {
 }
 
 const HELP = `
-  ${bold('ai-quotas')} — see your Claude and Codex usage limits
+  ${bold('ai-quotas')} — see your Claude, Codex, and Gemini (Antigravity) usage limits
 
   ${bold('Usage')}
-    ai-quotas                 print current quotas once
-    ai-quotas -w [seconds]    refresh in place (default 60s)
-    ai-quotas --json          machine-readable output
-    ai-quotas --serve         start the web dashboard
-    ai-quotas --serve --open  ...and open it in a browser
+    ai-quotas                         print current quotas once
+    ai-quotas -w [seconds]            refresh in place (default 60s)
+    ai-quotas --providers claude,gemini  only check specific providers
+    ai-quotas --json                  machine-readable output
+    ai-quotas --serve                 start the web dashboard
+    ai-quotas --serve --open          ...and open it in a browser
 
   ${bold('Options')}
-    -p, --port <n>   dashboard port (default 4317)
-    -h, --help       show this help
+    -P, --providers <list>  comma-separated providers (claude,codex,gemini)
+    -p, --port <n>          dashboard port (default 4317)
+    -h, --help              show this help
 
-  Reads the logins already used by the Claude Code and Codex CLIs.
+  Reads the logins already used by Claude Code, Codex CLI, and Antigravity CLI (agy).
 `;
 
 async function main() {
@@ -126,7 +132,7 @@ async function main() {
   }
 
   if (args.json) {
-    console.log(JSON.stringify(await fetchAll(), null, 2));
+    console.log(JSON.stringify(await fetchAll(args.providers), null, 2));
     return;
   }
 
@@ -135,7 +141,7 @@ async function main() {
     process.on('SIGINT', () => { stop = true; process.stdout.write('\x1b[?25h\n'); process.exit(0); });
     process.stdout.write('\x1b[?25l'); // hide cursor while repainting
     while (!stop) {
-      const data = await fetchAll();
+      const data = await fetchAll(args.providers);
       // Clear screen and repaint so the display stays in one place.
       process.stdout.write('\x1b[2J\x1b[H');
       process.stdout.write(render(data));
@@ -145,7 +151,7 @@ async function main() {
     return;
   }
 
-  console.log(render(await fetchAll()));
+  console.log(render(await fetchAll(args.providers)));
 }
 
 main().catch((e) => {
