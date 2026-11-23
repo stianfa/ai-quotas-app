@@ -82,3 +82,42 @@ test('serves locally, caches reads, and protects forced refreshes', async (t) =>
   assert.equal(simpleCrossOriginRequest.status, 403);
   assert.equal(calls, 2);
 });
+
+test('lists available providers and filters quota queries by selection', async (t) => {
+  const seen = [];
+  const { server } = await startServer({
+    port: 0,
+    fetchQuotas: async (only) => {
+      seen.push(only ?? 'all');
+      return {
+        fetchedAt: seen.length,
+        providers: (only ?? ['claude', 'codex', 'gemini']).map((id) => ({ id })),
+      };
+    },
+  });
+  t.after(() => new Promise((resolve, reject) => server.close((e) => e ? reject(e) : resolve())));
+  const port = server.address().port;
+  const host = `127.0.0.1:${port}`;
+  const apiHeaders = { host, 'x-ai-quotas-request': '1' };
+
+  const list = await rawRequest(port, { path: '/api/providers', headers: apiHeaders });
+  assert.equal(list.status, 200);
+  const ids = JSON.parse(list.body).providers.map((p) => p.id);
+  assert.deepEqual(ids, ['claude', 'codex', 'gemini']);
+
+  const filtered = await rawRequest(port, { path: '/api/quotas?providers=gemini,claude', headers: apiHeaders });
+  assert.equal(filtered.status, 200);
+  assert.deepEqual(JSON.parse(filtered.body).providers.map((p) => p.id), ['gemini', 'claude']);
+
+  // Order-insensitive cache hit for the same selection
+  const cached = await rawRequest(port, { path: '/api/quotas?providers=claude,gemini', headers: apiHeaders });
+  assert.equal(cached.status, 200);
+  assert.equal(JSON.parse(cached.body).cached, true);
+  assert.equal(seen.length, 1);
+
+  // Empty selection skips fetching completely
+  const empty = await rawRequest(port, { path: '/api/quotas?providers=', headers: apiHeaders });
+  assert.equal(empty.status, 200);
+  assert.deepEqual(JSON.parse(empty.body).providers, []);
+  assert.equal(seen.length, 1);
+});

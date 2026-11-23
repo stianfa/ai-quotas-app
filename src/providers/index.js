@@ -1,5 +1,6 @@
 import { fetchClaude } from './claude.js';
 import { fetchCodex } from './codex.js';
+import { fetchGemini } from './gemini.js';
 import { fail } from './base.js';
 
 /**
@@ -7,13 +8,14 @@ import { fail } from './base.js';
  * function returning ok()/fail(), then listing it here.
  */
 export const PROVIDERS = [
-  { id: 'claude', name: 'Claude', fetch: fetchClaude },
-  { id: 'codex', name: 'Codex', fetch: fetchCodex },
+  { id: 'claude', name: 'Claude', label: 'Claude', fetch: fetchClaude },
+  { id: 'codex', name: 'Codex', label: 'Codex', fetch: fetchCodex },
+  { id: 'gemini', name: 'Gemini', label: 'Gemini (Antigravity)', fetch: fetchGemini },
 ];
 
-/** Query every provider in parallel; one failure never hides the others. */
+/** Query every selected provider in parallel; one failure never hides the others. */
 export async function fetchAll(only = null) {
-  const selected = only?.length
+  const selected = Array.isArray(only)
     ? PROVIDERS.filter((p) => only.includes(p.id))
     : PROVIDERS;
 

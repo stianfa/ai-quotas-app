@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 
-import { fetchAll } from './providers/index.js';
+import { PROVIDERS, fetchAll } from './providers/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
@@ -71,27 +71,43 @@ function securityHeaders() {
   };
 }
 
+function parseSelectedProviders(url) {
+  if (!url.searchParams.has('providers')) return null;
+  const raw = url.searchParams.get('providers') ?? '';
+  const ids = raw
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return [...new Set(ids)];
+}
+
 export function startServer({ port = 4317, host = '127.0.0.1', fetchQuotas = fetchAll } = {}) {
-  // Cache state belongs to this server instance, which keeps tests and multiple
-  // programmatic servers isolated from each other.
-  let cache = { at: 0, data: null };
-  let inFlight = null;
+  // Cache state belongs to this server instance, keyed by provider selection,
+  // which keeps tests, multiple programmatic servers, and filtered views isolated.
+  const caches = new Map();
+  const inFlights = new Map();
 
-  async function getQuotas({ force = false } = {}) {
-    const fresh = !force && cache.data && Date.now() - cache.at < CACHE_MS;
-    if (fresh) return { ...cache.data, cached: true };
-    if (inFlight) return await inFlight;
+  async function getQuotas({ force = false, only = null } = {}) {
+    if (Array.isArray(only) && only.length === 0) {
+      return { fetchedAt: Date.now(), providers: [], cached: false };
+    }
+    const key = Array.isArray(only) ? [...only].sort().join(',') : '*';
+    const existing = caches.get(key);
+    const fresh = !force && existing?.data && Date.now() - existing.at < CACHE_MS;
+    if (fresh) return { ...existing.data, cached: true };
+    if (inFlights.has(key)) return await inFlights.get(key);
 
-    inFlight = (async () => {
+    const promise = (async () => {
       try {
-        const data = await fetchQuotas();
-        cache = { at: Date.now(), data };
+        const data = only == null ? await fetchQuotas() : await fetchQuotas(only);
+        caches.set(key, { at: Date.now(), data });
         return { ...data, cached: false };
       } finally {
-        inFlight = null;
+        inFlights.delete(key);
       }
     })();
-    return await inFlight;
+    inFlights.set(key, promise);
+    return await promise;
   }
 
   const server = createServer(async (req, res) => {
@@ -100,6 +116,27 @@ export function startServer({ port = 4317, host = '127.0.0.1', fetchQuotas = fet
       return;
     }
     const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
+
+    if (url.pathname === '/api/providers') {
+      if (req.method !== 'GET') {
+        res.writeHead(405, { ...securityHeaders(), allow: 'GET' }).end('method not allowed');
+        return;
+      }
+      if (!apiRequestAllowed(req)) {
+        res.writeHead(403, securityHeaders()).end('forbidden');
+        return;
+      }
+      res.writeHead(200, {
+        ...securityHeaders(),
+        'content-type': 'application/json',
+        'cache-control': 'no-store',
+        vary: 'Origin',
+      });
+      res.end(JSON.stringify({
+        providers: PROVIDERS.map(({ id, name, label }) => ({ id, name, label: label ?? name })),
+      }));
+      return;
+    }
 
     const isRead = url.pathname === '/api/quotas';
     const isRefresh = url.pathname === '/api/quotas/refresh';
@@ -113,7 +150,8 @@ export function startServer({ port = 4317, host = '127.0.0.1', fetchQuotas = fet
         return;
       }
       try {
-        const data = await getQuotas({ force: isRefresh });
+        const only = parseSelectedProviders(url);
+        const data = await getQuotas({ force: isRefresh, only });
         res.writeHead(200, {
           ...securityHeaders(),
           'content-type': 'application/json',

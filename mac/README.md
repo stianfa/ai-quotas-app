@@ -21,6 +21,7 @@ shows an error card instead of a bar.
 |---|---|---|
 | Claude | [Claude Code](https://claude.com/claude-code) installed and signed in | `claude` |
 | Codex | [Codex CLI](https://developers.openai.com/codex/cli) installed and `codex login` done | `codex` |
+| Gemini (Antigravity) | [Antigravity CLI](https://antigravity.google) (`agy`) installed and signed in | `agy -p /usage --output-format json` |
 
 You also need Xcode command line tools (`xcode-select --install`).
 
@@ -51,7 +52,8 @@ Click the menu bar item → **Settings…**
 
 | Setting | Default | Notes |
 |---|---|---|
-| Claude / Codex label | `Claude` / `Codex` | Any text. **Leave empty to hide that label** and show just its bar. |
+| Providers | Claude, Codex, Gemini (Antigravity) all checked | Uncheck any provider to hide it and stop querying it. |
+| Claude / Codex / Gemini label | `Claude` / `Codex` / `Gemini` | Any text. **Leave empty to hide that label** and show just its bar. |
 | Bar width | 42 pt | 16–240. Wider bars make the level easier to read. |
 | Bar height | 7 pt | 3–22. Capped at 22 because that's the menu bar's height. |
 | Show percentages | on | Off gives bars only. |

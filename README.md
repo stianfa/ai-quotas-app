@@ -26,6 +26,7 @@ to be signed in to whichever providers you want to see:
 |---|---|
 | **Claude** | [Claude Code](https://claude.com/claude-code) installed, and signed in (run `claude`) |
 | **Codex** | [Codex CLI](https://developers.openai.com/codex/cli) installed, and `codex login` done |
+| **Gemini (Antigravity)** | [Antigravity CLI](https://antigravity.google) (`agy`) installed and signed in |
 
 **Only signed in to one of them? That's fine.** The other simply shows an error card telling you
 what to run. Nothing else breaks.
@@ -80,6 +81,7 @@ npm link
 |---|---|
 | **Claude** | 5-hour session, 7-day, and overage when your plan has it |
 | **Codex** | Your plan's primary window (weekly on Team), plus a secondary one if present |
+| **Gemini (Antigravity)** | 5-hour and weekly limits for Gemini models and Claude & GPT models |
 
 Bars turn amber past 70% and red past 90%. Reset times count down live.
 
@@ -111,6 +113,8 @@ Each provider is checked locally through its installed CLI session:
 - **Codex** — asks the documented [Codex app-server API](https://developers.openai.com/codex/app-server/#6-rate-limits-chatgpt)
   for `account/rateLimits/read`. The Codex CLI owns authentication and token refresh, and no model
   response is generated.
+- **Gemini (Antigravity)** — runs `agy -p /usage --output-format json`. The Antigravity CLI owns
+  Google authentication and token refresh, and no model turn is executed.
 
 The macOS app refreshes Claude's OAuth session shortly before its access token expires, using
 Claude Code's refresh lock and updating the same Keychain item with the rotated credentials.

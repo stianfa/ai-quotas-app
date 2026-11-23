@@ -174,10 +174,17 @@ final class StatusItemController {
     /// an optional second as the faint fill behind it. Claude shows its 5-hour
     /// window inside its 7-day one; overage stays in the panel, because it tracks
     /// spend beyond the plan and would otherwise take over the bar whenever it was
-    /// highest.
+    /// highest. Gemini (Antigravity) mirrors that with its 5-hour and weekly
+    /// windows in one bar.
     private func barWindows(for p: ProviderResult) -> [QuotaWindow] {
         if p.id == "claude" {
             let shared = ["five_hour", "seven_day"].compactMap { id in
+                p.windows.first { $0.id == id && $0.usedPercent != nil }
+            }
+            if !shared.isEmpty { return shared }
+        }
+        if p.id == "gemini" {
+            let shared = ["gemini-5h", "gemini-weekly"].compactMap { id in
                 p.windows.first { $0.id == id && $0.usedPercent != nil }
             }
             if !shared.isEmpty { return shared }
@@ -186,6 +193,7 @@ final class StatusItemController {
     }
 
     private var tooltip: String {
+        guard store.hasEnabledProviders else { return "AI Quotas — no providers selected" }
         guard !store.snapshot.providers.isEmpty else { return "AI Quotas — loading…" }
         return store.snapshot.providers.map { p -> String in
             if let e = p.error { return "\(p.name): \(e)" }

@@ -14,18 +14,32 @@
         <h1>AI Quotas</h1>
         <p class="sub" id="sub">Loading…</p>
       </div>
-      <button id="refresh" class="refresh" title="Refresh now" aria-label="Refresh now">
-        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-          <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4" />
-        </svg>
-      </button>
+      <div class="head-actions">
+        <button id="settings-toggle" class="icon-btn" title="Settings" aria-label="Settings" aria-expanded="false" aria-controls="settings-panel">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                  d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-2-.9L14.4 3h-4.8l-.5 2.9a7.4 7.4 0 0 0-2 .9l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 2 .9l.5 2.9h4.8l.5-2.9a7.4 7.4 0 0 0 2-.9l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2Z" />
+          </svg>
+        </button>
+        <button id="refresh" class="icon-btn refresh" title="Refresh now" aria-label="Refresh now">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                  d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4" />
+          </svg>
+        </button>
+      </div>
     </header>
+
+    <section id="settings-panel" class="settings" hidden>
+      <div class="settings-title">Tracked providers</div>
+      <div id="provider-toggles" class="provider-toggles"></div>
+      <p class="settings-note">Unchecked providers are hidden and won’t be queried.</p>
+    </section>
 
     <div id="cards" class="cards"></div>
 
     <footer class="foot">
-      Runs locally. Quota checks contact Anthropic and OpenAI using your existing CLI sessions.
+      Runs locally. Quota checks contact only your enabled providers using your existing CLI sessions.
     </footer>
   </main>
   <script src="/app.js" type="module"></script>

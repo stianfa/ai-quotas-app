@@ -67,7 +67,13 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
-.refresh {
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-btn {
   flex: none;
   display: grid;
   place-items: center;
@@ -80,9 +86,61 @@ h1 {
   cursor: pointer;
   transition: color .15s, border-color .15s;
 }
-.refresh:hover { color: var(--text); border-color: var(--muted); }
+.icon-btn:hover,
+.icon-btn[aria-expanded="true"] { color: var(--text); border-color: var(--muted); }
 .refresh.spin svg { animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.settings {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 18px;
+  margin-bottom: 16px;
+}
+.settings[hidden] { display: none; }
+.settings-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.provider-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+}
+.provider-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.provider-toggle input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  cursor: pointer;
+}
+.settings-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.empty-state {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 24px 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13.5px;
+}
 
 .cards { display: flex; flex-direction: column; gap: 14px; }
 

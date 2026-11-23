@@ -1,9 +1,22 @@
 const cardsEl = document.getElementById('cards');
 const subEl = document.getElementById('sub');
 const refreshBtn = document.getElementById('refresh');
+const settingsBtn = document.getElementById('settings-toggle');
+const settingsPanel = document.getElementById('settings-panel');
+const togglesEl = document.getElementById('provider-toggles');
 
 const POLL_MS = 60_000;
+const STORAGE_KEY = 'ai-quotas.enabled-providers';
+const DEFAULT_PROVIDERS = [
+  { id: 'claude', name: 'Claude', label: 'Claude' },
+  { id: 'codex', name: 'Codex', label: 'Codex' },
+  { id: 'gemini', name: 'Gemini', label: 'Gemini (Antigravity)' },
+];
+
+let availableProviders = DEFAULT_PROVIDERS;
+let enabledSet = null;
 let lastData = null;
+let loadSeq = 0;
 
 function level(pct) {
   if (pct == null) return 'none';
@@ -30,6 +43,59 @@ function el(tag, className, text) {
   if (className) n.className = className;
   if (text != null) n.textContent = text;
   return n;
+}
+
+function loadEnabledProviders(providers) {
+  const validIds = providers.map((p) => p.id);
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw != null) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        // Object map { [id]: boolean } so newly added providers default to enabled.
+        const set = new Set();
+        for (const id of validIds) {
+          if (parsed[id] !== false) set.add(id);
+        }
+        return set;
+      }
+      if (Array.isArray(parsed)) {
+        return new Set(parsed.filter((id) => validIds.includes(id)));
+      }
+    }
+  } catch { /* ignore corrupt storage */ }
+  return new Set(validIds);
+}
+
+function saveEnabledProviders() {
+  try {
+    const map = {};
+    for (const p of availableProviders) {
+      map[p.id] = enabledSet.has(p.id);
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+  } catch { /* ignore storage errors */ }
+}
+
+function selectedProviderIds() {
+  return availableProviders.map((p) => p.id).filter((id) => enabledSet.has(id));
+}
+
+function renderSettings() {
+  togglesEl.replaceChildren(...availableProviders.map((p) => {
+    const label = el('label', 'provider-toggle');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = enabledSet.has(p.id);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) enabledSet.add(p.id);
+      else enabledSet.delete(p.id);
+      saveEnabledProviders();
+      load();
+    });
+    label.append(checkbox, document.createTextNode(p.label ?? p.name));
+    return label;
+  }));
 }
 
 function renderWindow(w) {
@@ -92,27 +158,53 @@ function renderCard(p) {
 }
 
 function render(data) {
+  const ids = selectedProviderIds();
+  if (ids.length === 0) {
+    cardsEl.replaceChildren(
+      el('div', 'empty-state', 'No providers selected. Check one or more providers in Settings.'),
+    );
+    subEl.textContent = 'No providers tracked';
+    return;
+  }
   cardsEl.replaceChildren(...data.providers.map(renderCard));
   const time = new Date(data.fetchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   subEl.textContent = `Updated ${time}`;
 }
 
 async function load({ force = false } = {}) {
+  const seq = ++loadSeq;
+  const ids = selectedProviderIds();
+  if (ids.length === 0) {
+    lastData = { fetchedAt: Date.now(), providers: [] };
+    render(lastData);
+    return;
+  }
+
   refreshBtn.classList.add('spin');
   try {
-    const res = await fetch(force ? '/api/quotas/refresh' : '/api/quotas', {
+    const query = `?providers=${encodeURIComponent(ids.join(','))}`;
+    const res = await fetch(`${force ? '/api/quotas/refresh' : '/api/quotas'}${query}`, {
       method: force ? 'POST' : 'GET',
       headers: { 'X-AI-Quotas-Request': '1' },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    lastData = await res.json();
+    const data = await res.json();
+    if (seq !== loadSeq) return;
+    lastData = data;
     render(lastData);
   } catch (e) {
+    if (seq !== loadSeq) return;
     subEl.textContent = `Could not reach the server — ${e.message}`;
   } finally {
-    refreshBtn.classList.remove('spin');
+    if (seq === loadSeq) refreshBtn.classList.remove('spin');
   }
 }
+
+settingsBtn.addEventListener('click', () => {
+  const open = settingsPanel.hidden;
+  settingsPanel.hidden = !open;
+  settingsBtn.setAttribute('aria-expanded', String(open));
+});
 
 refreshBtn.addEventListener('click', () => load({ force: true }));
 
@@ -125,5 +217,22 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') load();
 });
 
-cardsEl.append(el('div', 'skeleton'), el('div', 'skeleton'));
-load();
+async function init() {
+  cardsEl.append(el('div', 'skeleton'), el('div', 'skeleton'));
+  try {
+    const res = await fetch('/api/providers', {
+      headers: { 'X-AI-Quotas-Request': '1' },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data?.providers) && data.providers.length > 0) {
+        availableProviders = data.providers;
+      }
+    }
+  } catch { /* fall back to built-in provider list */ }
+  enabledSet = loadEnabledProviders(availableProviders);
+  renderSettings();
+  await load();
+}
+
+init();

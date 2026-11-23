@@ -39,11 +39,29 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section("Providers") {
+                Toggle("Claude", isOn: $store.trackClaude)
+                    .toggleStyle(.checkbox)
+                Toggle("Codex", isOn: $store.trackCodex)
+                    .toggleStyle(.checkbox)
+                Toggle("Gemini (Antigravity)", isOn: $store.trackGemini)
+                    .toggleStyle(.checkbox)
+
+                Text("Unchecked providers are hidden and won't be queried.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Menu bar") {
                 TextField("Claude label", text: $store.labelClaude,
                           prompt: Text("hidden"))
+                    .disabled(!store.trackClaude)
                 TextField("Codex label", text: $store.labelCodex,
                           prompt: Text("hidden"))
+                    .disabled(!store.trackCodex)
+                TextField("Gemini label", text: $store.labelGemini,
+                          prompt: Text("hidden"))
+                    .disabled(!store.trackGemini)
 
                 Text("Leave a label empty to show just its bar.")
                     .font(.system(size: 11))
@@ -95,7 +113,7 @@ struct SettingsView: View {
                         LoginItem.set(enabled: enabled)
                     }
 
-                Text("Each refresh checks your limits with Anthropic and OpenAI through your existing CLI sessions. AI Quotas has no telemetry or cloud service.")
+                Text("Each refresh checks your limits for enabled providers through your existing CLI sessions. AI Quotas has no telemetry or cloud service.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
