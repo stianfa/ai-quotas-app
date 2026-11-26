@@ -80,10 +80,18 @@ npm link
 | Provider | Windows shown |
 |---|---|
 | **Claude** | 5-hour session, 7-day, and overage when your plan has it |
-| **Codex** | Your plan's primary window (weekly on Team), plus a secondary one if present |
+| **Codex** | Your plan's primary window (weekly on Team), plus a secondary one if present, for each signed-in seat |
 | **Gemini (Antigravity)** | 5-hour and weekly limits for Gemini models and Claude & GPT models |
 
 Bars turn amber past 70% and red past 90%. Reset times count down live.
+
+### Several Codex seats
+
+Codex CLI keeps its login per `CODEX_HOME`, so a second ChatGPT seat lives in its own folder,
+for example `CODEX_HOME=~/.codex-seat2 codex login`. AI Quotas always checks `~/.codex` (or
+`$CODEX_HOME` when set), and also every other `~/.codex*` folder that holds an `auth.json`. It
+only checks that the file exists and never reads it. Each seat gets its own card, named `Codex
+seat 1`, `Codex seat 2`, … with the folder shown beside it. With one seat, nothing changes.
 
 **Overage reads differently from the rest** — it tracks pay-as-you-go usage *beyond* your plan, so
 0% is where you want to stay. It only appears if your plan has it enabled.
@@ -157,7 +165,8 @@ Provider changes fail visibly with a hint rather than silently displaying invent
 ## Adding another provider
 
 Each provider is one self-contained file. Create `src/providers/<name>.js` exporting a function that
-returns `ok()` or `fail()` from `base.js`:
+returns `ok()` or `fail()` from `base.js` (or an array of them, one per account, as Codex does for
+seats):
 
 ```js
 import { makeWindow, ok, fail } from './base.js';

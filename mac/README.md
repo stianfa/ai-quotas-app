@@ -53,7 +53,7 @@ Click the menu bar item → **Settings…**
 | Setting | Default | Notes |
 |---|---|---|
 | Providers | Claude, Codex, Gemini (Antigravity) all checked | Uncheck any provider to hide it and stop querying it. |
-| Claude / Codex / Gemini label | `Claude` / `Codex` / `Gemini` | Any text. **Leave empty to hide that label** and show just its bar. |
+| Claude / Codex / Gemini label | `Claude` / `Codex` / `Gemini` | Any text. **Leave empty to hide that label** and show just its bar. With several Codex seats the label gets the seat number: `Codex 1`, `Codex 2`. |
 | Bar width | 42 pt | 16–240. Wider bars make the level easier to read. |
 | Bar height | 7 pt | 3–22. Capped at 22 because that's the menu bar's height. |
 | Show percentages | on | Off gives bars only. |
@@ -92,6 +92,13 @@ weekly. Overage never appears in the menu bar. Open the panel for every window i
 - **Claude** — 5-hour session, 7-day, and overage if your plan has it
 - **Codex** — your plan's primary window (weekly on Team), plus a secondary if present
 
+**Several Codex seats.** Codex CLI keeps its login per `CODEX_HOME`, so a second ChatGPT seat
+lives in its own folder (`CODEX_HOME=~/.codex-seat2 codex login`). A menu bar app doesn't
+inherit your terminal's `CODEX_HOME`, so the app looks for seats itself: `~/.codex` is always
+checked, plus every other `~/.codex*` folder that holds an `auth.json` (it checks the file
+exists and never reads it). Each seat gets its own bar and card, `Codex seat 1`, `Codex seat 2`,
+… with the folder as a pill. The Codex checkbox covers all seats. With one seat, nothing changes.
+
 **Overage** is different from the others: it tracks pay-as-you-go usage *beyond* your plan,
 so 0% is where you want to stay. It only appears when your plan actually has it enabled.
 
@@ -114,8 +121,8 @@ The app refreshes Claude's OAuth session shortly before its access token expires
 Code's refresh lock and writes the rotated token back to the same credential store so both apps
 stay in sync. Codex continues to own its authentication through app-server.
 
-If Codex is unreachable, it falls back to the newest rate-limit snapshot in `~/.codex/sessions`
-and marks the card `cached`.
+If Codex is unreachable, it falls back to the newest rate-limit snapshot in that seat's
+`sessions` folder (`~/.codex/sessions` for the default seat) and marks the card `cached`.
 
 Some similar tools read only local logs to avoid API calls entirely. That works for Codex,
 which does log its limits, but it can't give accurate Claude numbers — those end up estimated

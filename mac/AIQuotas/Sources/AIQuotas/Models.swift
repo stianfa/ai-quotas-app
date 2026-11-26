@@ -19,8 +19,14 @@ struct QuotaWindow: Identifiable, Equatable {
 }
 
 struct ProviderResult: Identifiable, Equatable {
+    /// Unique per card. Equals `provider`, except for extra Codex seats.
     let id: String
     let name: String
+    /// Which provider this belongs to ("claude", "codex", "gemini"), for
+    /// tracking, labels, and menu bar layout.
+    let provider: String
+    /// 1-based seat number when a provider shows several accounts, else nil.
+    var seat: Int?
     var plan: String?
     var windows: [QuotaWindow] = []
     var tags: [String] = []
@@ -28,6 +34,12 @@ struct ProviderResult: Identifiable, Equatable {
     var hint: String?
     var rateLimited = false
     var isStale = false
+
+    init(id: String, name: String, provider: String? = nil) {
+        self.id = id
+        self.name = name
+        self.provider = provider ?? id
+    }
 
     var isOK: Bool { error == nil }
 
