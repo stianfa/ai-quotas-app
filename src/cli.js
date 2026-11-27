@@ -46,6 +46,7 @@ function render({ providers, fetchedAt }) {
 
   for (const p of providers) {
     const tags = [];
+    if (p.extra?.seat?.home) tags.push(p.extra.seat.home);
     if (p.plan) tags.push(p.plan);
     if (p.extra?.activeLimit) tags.push(p.extra.activeLimit);
     if (p.extra?.stale) tags.push('cached');

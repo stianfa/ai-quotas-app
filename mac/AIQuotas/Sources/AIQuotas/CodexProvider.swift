@@ -2,13 +2,67 @@ import Foundation
 
 /// Reads ChatGPT quota through Codex's documented app-server account API.
 /// Codex owns authentication and token refresh; this app never reads or writes
-/// `auth.json` directly.
+/// `auth.json` directly — it only checks whether one exists to find seats.
 enum CodexProvider {
-    private static var codexHome: URL {
-        if let env = ProcessInfo.processInfo.environment["CODEX_HOME"], !env.isEmpty {
-            return URL(fileURLWithPath: env)
+    /// One signed-in Codex account. Codex CLI keeps its login per `CODEX_HOME`,
+    /// so a second ChatGPT seat lives in a second folder such as `~/.codex-seat2`.
+    struct Seat: Sendable {
+        let home: URL
+        /// 1-based position, or nil when this is the only seat.
+        let number: Int?
+
+        var id: String { (number ?? 1) == 1 ? "codex" : "codex:\(home.lastPathComponent)" }
+        var name: String { number.map { "Codex seat \($0)" } ?? "Codex" }
+
+        /// `~/.codex-seat2` rather than the full path, when under home.
+        var displayHome: String {
+            let home = Credentials.home.standardizedFileURL.path
+            let path = self.home.path
+            return path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
         }
-        return Credentials.home.appendingPathComponent(".codex")
+
+        func emptyResult() -> ProviderResult {
+            var result = ProviderResult(id: id, name: name, provider: "codex")
+            result.seat = number
+            if number != nil { result.tags = [displayHome] }
+            return result
+        }
+    }
+
+    /// `$CODEX_HOME`, else `~/.codex` — the home a lone `codex` command uses.
+    private static var primaryHome: URL {
+        if let env = ProcessInfo.processInfo.environment["CODEX_HOME"], !env.isEmpty {
+            return URL(fileURLWithPath: env).standardizedFileURL
+        }
+        return Credentials.home.appendingPathComponent(".codex").standardizedFileURL
+    }
+
+    /// Every Codex home to query. The primary home is always first, exactly as
+    /// before, so a one-seat setup is unchanged. Any other `~/.codex*` folder
+    /// joins only when it holds an `auth.json` (checked, never read). A GUI app
+    /// does not inherit a terminal's `CODEX_HOME`, so this finds seats by folder.
+    static func seats() -> [Seat] {
+        let fm = FileManager.default
+        let primary = primaryHome
+        let home = Credentials.home
+        let names = (try? fm.contentsOfDirectory(atPath: home.path)) ?? []
+        let extras = names
+            .filter { $0.hasPrefix(".codex") }
+            .map { home.appendingPathComponent($0).standardizedFileURL }
+            .filter { url in
+                var isDirectory: ObjCBool = false
+                return url.path != primary.path
+                    && fm.fileExists(atPath: url.path, isDirectory: &isDirectory)
+                    && isDirectory.boolValue
+                    && fm.fileExists(atPath: url.appendingPathComponent("auth.json").path)
+            }
+            .sorted {
+                $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
+            }
+
+        let homes = [primary] + extras
+        if homes.count == 1 { return [Seat(home: primary, number: nil)] }
+        return homes.enumerated().map { Seat(home: $0.element, number: $0.offset + 1) }
     }
 
     private static func codexExecutable() -> URL? {
@@ -44,7 +98,7 @@ enum CodexProvider {
     }
 
     /// Blocking stdio exchange, always run from a detached utility task.
-    private static func appServerResponse() throws -> Data {
+    private static func appServerResponse(codexHome: URL) throws -> Data {
         guard let executable = codexExecutable() else {
             throw QuotaError.message("Codex CLI not found")
         }
@@ -58,6 +112,8 @@ enum CodexProvider {
         var environment = ProcessInfo.processInfo.environment
         let inheritedPath = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
         environment["PATH"] = "\(executable.deletingLastPathComponent().path):\(inheritedPath)"
+        // Each seat is its own Codex login, selected by CODEX_HOME.
+        environment["CODEX_HOME"] = codexHome.path
         proc.environment = environment
         let input = Pipe(), output = Pipe()
         proc.standardInput = input
@@ -135,7 +191,7 @@ enum CodexProvider {
         return "\(Int(m))-minute"
     }
 
-    private static func liveResult(from data: Data) throws -> ProviderResult {
+    private static func liveResult(from data: Data, seat: Seat) throws -> ProviderResult {
         guard let response = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let result = response["result"] as? [String: Any]
         else { throw QuotaError.message("malformed Codex app-server response") }
@@ -165,17 +221,17 @@ enum CodexProvider {
             windows.append(window(secondary, id: "secondary", fallback: "Secondary"))
         }
 
-        var out = ProviderResult(id: "codex", name: "Codex")
+        var out = seat.emptyResult()
         out.plan = limits["planType"] as? String
         out.windows = windows
-        if let name = limits["limitName"] as? String, !name.isEmpty { out.tags = [name] }
+        if let name = limits["limitName"] as? String, !name.isEmpty { out.tags.append(name) }
         if let reached = limits["rateLimitReachedType"], !(reached is NSNull) {
             out.rateLimited = true
         }
         return out
     }
 
-    private static func newestSessionFiles(limit: Int) -> [URL] {
+    private static func newestSessionFiles(codexHome: URL, limit: Int) -> [URL] {
         let root = codexHome.appendingPathComponent("sessions")
         let fm = FileManager.default
         guard let en = fm.enumerator(at: root,
@@ -191,8 +247,8 @@ enum CodexProvider {
     }
 
     /// Last-resort read of recent session logs, used when app-server is unavailable.
-    private static func fromSessionLogs() -> (windows: [QuotaWindow], plan: String?)? {
-        for url in newestSessionFiles(limit: 10) {
+    private static func fromSessionLogs(codexHome: URL) -> (windows: [QuotaWindow], plan: String?)? {
+        for url in newestSessionFiles(codexHome: codexHome, limit: 10) {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
             let lines = text.split(separator: "\n").filter { $0.contains("\"rate_limits\"") }
             for line in lines.reversed() {
@@ -226,24 +282,40 @@ enum CodexProvider {
         return nil
     }
 
-    static func fetch() async -> ProviderResult {
+    /// One result per seat, in seat order, queried in parallel.
+    static func fetchAll() async -> [ProviderResult] {
+        let seats = seats()
+        return await withTaskGroup(of: (Int, ProviderResult).self) { group in
+            for (index, seat) in seats.enumerated() {
+                group.addTask { (index, await fetch(seat: seat)) }
+            }
+            var results: [(Int, ProviderResult)] = []
+            for await result in group { results.append(result) }
+            return results.sorted { $0.0 < $1.0 }.map(\.1)
+        }
+    }
+
+    static func fetch(seat: Seat) async -> ProviderResult {
         do {
+            let home = seat.home
             let data = try await Task.detached(priority: .utility) {
-                try appServerResponse()
+                try appServerResponse(codexHome: home)
             }.value
-            return try liveResult(from: data)
+            return try liveResult(from: data, seat: seat)
         } catch {
-            if let cached = fromSessionLogs() {
-                var result = ProviderResult(id: "codex", name: "Codex")
+            if let cached = fromSessionLogs(codexHome: seat.home) {
+                var result = seat.emptyResult()
                 result.windows = cached.windows
                 result.plan = cached.plan
                 result.isStale = true
-                Diagnostics.log("Codex app-server unavailable — using cached limits (\(error.localizedDescription))")
+                Diagnostics.log("\(seat.name) app-server unavailable — using cached limits (\(error.localizedDescription))")
                 return result
             }
-            var result = ProviderResult(id: "codex", name: "Codex")
+            var result = seat.emptyResult()
             result.error = error.localizedDescription
-            result.hint = "Install or update Codex, then sign in with ChatGPT using `codex login`."
+            result.hint = seat.number == nil
+                ? "Install or update Codex, then sign in with ChatGPT using `codex login`."
+                : "Install or update Codex, then sign in to this seat with `CODEX_HOME=\(seat.displayHome) codex login`."
             return result
         }
     }

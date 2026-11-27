@@ -104,7 +104,7 @@ final class StatusItemController {
             let windows = p.isOK ? barWindows(for: p) : []
             let main = windows.first
             return MenuBarRenderer.Entry(
-                tag: store.label(for: p.id),
+                tag: store.label(for: p),
                 percent: main?.usedPercent,
                 // The countdown belongs to the window the solid fill shows.
                 reset: compactReset(main?.resetsAt, now: store.now),
@@ -177,13 +177,13 @@ final class StatusItemController {
     /// highest. Gemini (Antigravity) mirrors that with its 5-hour and weekly
     /// windows in one bar.
     private func barWindows(for p: ProviderResult) -> [QuotaWindow] {
-        if p.id == "claude" {
+        if p.provider == "claude" {
             let shared = ["five_hour", "seven_day"].compactMap { id in
                 p.windows.first { $0.id == id && $0.usedPercent != nil }
             }
             if !shared.isEmpty { return shared }
         }
-        if p.id == "gemini" {
+        if p.provider == "gemini" {
             let shared = ["gemini-5h", "gemini-weekly"].compactMap { id in
                 p.windows.first { $0.id == id && $0.usedPercent != nil }
             }

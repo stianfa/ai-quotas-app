@@ -92,6 +92,14 @@ final class QuotaStore: ObservableObject {
         }
     }
 
+    /// The menu bar label for one card. With several Codex seats each gets its
+    /// number ("Codex 1", "Codex 2") so the bars can be told apart.
+    func label(for result: ProviderResult) -> String {
+        let base = label(for: result.provider)
+        guard let seat = result.seat, !base.isEmpty else { return base }
+        return "\(base) \(seat)"
+    }
+
     private var refreshTimer: Timer?
     private var clockTimer: Timer?
     /// When the in-flight refresh began, for the watchdog in `refresh()`.
@@ -135,10 +143,10 @@ final class QuotaStore: ObservableObject {
     private func handleTrackedProvidersChanged() {
         // Hide unchecked providers right away rather than waiting for the next fetch.
         snapshot = Snapshot(
-            providers: snapshot.providers.filter { isTracked($0.id) },
+            providers: snapshot.providers.filter { isTracked($0.provider) },
             fetchedAt: snapshot.fetchedAt
         )
-        let loaded = Set(snapshot.providers.map(\.id))
+        let loaded = Set(snapshot.providers.map(\.provider))
         let missingEnabled = (trackClaude && !loaded.contains("claude"))
             || (trackCodex && !loaded.contains("codex"))
             || (trackGemini && !loaded.contains("gemini"))
@@ -185,10 +193,12 @@ final class QuotaStore: ObservableObject {
         }
 
         async let claude: ProviderResult? = wantClaude ? ClaudeProvider.fetch() : nil
-        async let codex: ProviderResult? = wantCodex ? CodexProvider.fetch() : nil
+        // Codex returns one result per signed-in seat.
+        async let codex: [ProviderResult] = wantCodex ? CodexProvider.fetchAll() : []
         async let gemini: ProviderResult? = wantGemini ? GeminiProvider.fetch() : nil
-        let fetched = await [claude, codex, gemini].compactMap { $0 }
-        let providers = fetched.filter { isTracked($0.id) }
+        let (claudeResult, codexResults, geminiResult) = await (claude, codex, gemini)
+        let fetched = [claudeResult].compactMap { $0 } + codexResults + [geminiResult].compactMap { $0 }
+        let providers = fetched.filter { isTracked($0.provider) }
 
         snapshot = Snapshot(providers: providers, fetchedAt: Date())
         now = Date()

@@ -124,6 +124,7 @@ function renderCard(p) {
   const head = el('div', 'card-head');
   head.append(el('span', 'name', p.name));
 
+  if (p.extra?.seat?.home) head.append(el('span', 'pill', p.extra.seat.home));
   if (p.plan) head.append(el('span', 'pill', p.plan));
   if (p.extra?.activeLimit) head.append(el('span', 'pill', p.extra.activeLimit));
   if (p.extra?.rateLimited) head.append(el('span', 'pill crit', 'rate limited'));

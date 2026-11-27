@@ -1,19 +1,50 @@
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { access, readdir, readFile, stat } from 'node:fs/promises';
 
 import { makeWindow, ok, fail } from './base.js';
 
-const CODEX_HOME = process.env.CODEX_HOME || join(homedir(), '.codex');
 const APP_SERVER_TIMEOUT_MS = 20_000;
 
-function appServerRequest() {
+/**
+ * Every Codex home to query, one per signed-in seat.
+ *
+ * Codex CLI keeps its login per `CODEX_HOME`, so running a second ChatGPT seat
+ * means a second folder such as `~/.codex-seat2`. The primary home
+ * (`$CODEX_HOME`, else `~/.codex`) is always included, exactly as before, so a
+ * one-seat setup is unchanged. Any other `~/.codex*` folder joins only when it
+ * holds an `auth.json`. Its existence is checked, never its contents.
+ */
+export async function discoverCodexHomes({ homeDir = homedir(), env = process.env } = {}) {
+  const primary = resolve(env.CODEX_HOME || join(homeDir, '.codex'));
+  const extras = [];
+  let entries = [];
+  try { entries = await readdir(homeDir, { withFileTypes: true }); } catch { /* no home listing */ }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith('.codex')) continue;
+    const dir = resolve(homeDir, entry.name);
+    if (dir === primary) continue;
+    try {
+      await access(join(dir, 'auth.json'));
+      extras.push(dir);
+    } catch { /* not signed in */ }
+  }
+  extras.sort((a, b) => basename(a).localeCompare(basename(b), 'en', { numeric: true }));
+  return [primary, ...extras];
+}
+
+/** The child environment for one seat: the caller's env with that seat's home. */
+export function appServerEnv(codexHome, baseEnv = process.env) {
+  return { ...baseEnv, CODEX_HOME: codexHome };
+}
+
+function appServerRequest(codexHome) {
   return new Promise((resolve, reject) => {
     const proc = spawn('codex', ['app-server'], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env,
+      env: appServerEnv(codexHome),
     });
     const lines = createInterface({ input: proc.stdout });
     let stderr = '';
@@ -146,8 +177,8 @@ export function fromAppServer(result) {
 }
 
 /** Last-resort read of recent session logs, used when app-server is unavailable. */
-async function fromSessionLogs() {
-  const root = join(CODEX_HOME, 'sessions');
+async function fromSessionLogs(codexHome) {
+  const root = join(codexHome, 'sessions');
   const files = [];
   async function walk(dir, depth = 0) {
     if (depth > 4) return;
@@ -212,18 +243,57 @@ function fromCached({ rl, at }, why) {
   });
 }
 
-/** Fetch Codex quotas through the documented Codex app-server account API. */
-export async function fetchCodex() {
+/** `~/.codex-seat2` rather than the full path, when the folder is under home. */
+function displayHome(codexHome, homeDir) {
+  const home = resolve(homeDir);
+  return codexHome.startsWith(`${home}/`) ? `~/${codexHome.slice(home.length + 1)}` : codexHome;
+}
+
+/** Name and tag one seat. A single seat keeps the plain `codex` / `Codex` identity. */
+function seatIdentity(codexHome, index, total, homeDir) {
+  if (total === 1) return { id: 'codex', name: 'Codex', seat: null };
+  return {
+    id: index === 0 ? 'codex' : `codex:${basename(codexHome)}`,
+    name: `Codex seat ${index + 1}`,
+    seat: { number: index + 1, home: displayHome(codexHome, homeDir) },
+  };
+}
+
+async function fetchSeat(codexHome, identity, request) {
+  const { id, name, seat } = identity;
+  const withSeat = (result) => ({
+    ...result,
+    id,
+    name,
+    extra: seat ? { ...result.extra, seat } : result.extra,
+  });
   try {
-    return fromAppServer(await appServerRequest());
+    return withSeat(fromAppServer(await request(codexHome)));
   } catch (error) {
-    const cached = await fromSessionLogs();
-    if (cached) return fromCached(cached, error.message);
-    return fail({
-      id: 'codex',
-      name: 'Codex',
+    const cached = await fromSessionLogs(codexHome);
+    if (cached) return withSeat(fromCached(cached, error.message));
+    return withSeat(fail({
+      id,
+      name,
       error: error.message,
-      hint: 'Install or update the Codex CLI, then sign in with ChatGPT using `codex login`.',
-    });
+      hint: seat
+        ? `Install or update the Codex CLI, then sign in to this seat with \`CODEX_HOME=${seat.home} codex login\`.`
+        : 'Install or update the Codex CLI, then sign in with ChatGPT using `codex login`.',
+    }));
   }
+}
+
+/**
+ * Fetch Codex quotas through the documented Codex app-server account API,
+ * once per signed-in seat. Always returns an array, one result per seat.
+ */
+export async function fetchCodex({
+  homeDir = homedir(),
+  env = process.env,
+  request = appServerRequest,
+} = {}) {
+  const homes = await discoverCodexHomes({ homeDir, env });
+  return Promise.all(homes.map((home, i) => (
+    fetchSeat(home, seatIdentity(home, i, homes.length, homeDir), request)
+  )));
 }

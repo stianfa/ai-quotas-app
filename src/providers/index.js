@@ -5,7 +5,8 @@ import { fail } from './base.js';
 
 /**
  * Add a provider by dropping a module next to this one that exports a fetch
- * function returning ok()/fail(), then listing it here.
+ * function returning ok()/fail(), then listing it here. A provider with several
+ * accounts (Codex seats) may return an array, one result per account.
  */
 export const PROVIDERS = [
   { id: 'claude', name: 'Claude', label: 'Claude', fetch: fetchClaude },
@@ -27,5 +28,5 @@ export async function fetchAll(only = null) {
     }
   }));
 
-  return { fetchedAt: Date.now(), providers: results };
+  return { fetchedAt: Date.now(), providers: results.flat() };
 }
